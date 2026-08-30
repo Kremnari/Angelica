@@ -37,6 +37,9 @@ public abstract class TileOverride implements Comparable<TileOverride> {
     private final String baseFilename;
     protected final TileLoader tileLoader;
     protected final int renderPass;
+    // Unrelated to renderPass (dead under Angelica's Celeritas pipeline -- see RenderPassAPI/NotFineConfig.renderPass).
+    // Purely a same-face paint-order/selection tag for TileOverrideIterator's own multi-layer compositing.
+    private final int renderLayer;
     private final int weight;
     private final List<BlockStateMatcher> matchBlocks;
     private final Set<String> matchTiles;
@@ -194,6 +197,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         }
 
         weight = properties.getInt("weight", 0);
+        renderLayer = properties.getInt("renderLayer", 0);
     }
 
     private boolean addIcon(ResourceLocation resource) {
@@ -360,6 +364,10 @@ public abstract class TileOverride implements Comparable<TileOverride> {
 
     final public int getWeight() {
         return weight;
+    }
+
+    final public int getRenderLayer() {
+        return renderLayer;
     }
 
     @Override

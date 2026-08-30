@@ -8,8 +8,8 @@ import com.gtnewhorizons.angelica.rendering.StateAwareTessellator;
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.llamalad7.mixinextras.sugar.Local;
 import com.prupe.mcpatcher.ctm.CTMUtils;
-import com.prupe.mcpatcher.ctm.CompactCtmQuadProcessor;
 import com.prupe.mcpatcher.ctm.RenderBlockState;
+import com.prupe.mcpatcher.ctm.TileOverrideImpl;
 import cpw.mods.fml.client.registry.RenderingRegistry;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
@@ -202,15 +202,41 @@ public abstract class MixinRenderBlocks implements ExtCeleritasRenderBlocks {
         if (ctx == null) {
             return;
         }
-        CompactCtmQuadProcessor processor = ctx.compact().getProcessor();
+        TileOverrideImpl.CTMCompact[] compacts = ctx.compacts();
         RenderBlockState renderBlockState = ctx.renderBlockState();
         CTMUtils.clearCurrentCompact();
         if (this.blockAccess == null || renderBlockState.getBlockAccess() == null) {
             return;
         }
 
-        if (processor.processFace((RenderBlocks)(Object)this, renderBlockState, icon, direction.ordinal())) {
+        RenderBlocks rb = (RenderBlocks) (Object) this;
+        int face = direction.ordinal();
+
+        // renderLayer=0 (compacts[0]) is the floor: it alone decides whether this face is CTM-managed at all.
+        // If it has nothing to paint for this neighbor state, we leave ci uncancelled so vanilla paints the
+        // plain icon, and we don't attempt the higher layers -- they're overlays on top of the floor, not a
+        // replacement for it.
+        if (compacts[0].getProcessor().processFace(rb, renderBlockState, icon, face)) {
+            for (int i = 1; i < compacts.length; i++) {
+                // Nudge one ULP further outward along this face's normal each layer, so each stacked quad
+                // occupies a distinct plane instead of z-fighting with the one under it -- the same trick
+                // GregTech's SBRWorldContext uses to draw its ore base+overlay textures.
+                angelica$nudgeFaceOutward(rb, face);
+                compacts[i].getProcessor().processFace(rb, renderBlockState, icon, face);
+            }
             ci.cancel();
+        }
+    }
+
+    @Unique
+    private static void angelica$nudgeFaceOutward(RenderBlocks rb, int face) {
+        switch (face) {
+            case 0 -> rb.renderMinY = Math.nextDown(rb.renderMinY); // Y-
+            case 1 -> rb.renderMaxY = Math.nextUp(rb.renderMaxY);   // Y+
+            case 2 -> rb.renderMinZ = Math.nextDown(rb.renderMinZ); // Z-
+            case 3 -> rb.renderMaxZ = Math.nextUp(rb.renderMaxZ);   // Z+
+            case 4 -> rb.renderMinX = Math.nextDown(rb.renderMinX); // X-
+            case 5 -> rb.renderMaxX = Math.nextUp(rb.renderMaxX);   // X+
         }
     }
 
