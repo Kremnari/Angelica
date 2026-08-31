@@ -43,6 +43,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
     private final int weight;
     private final List<BlockStateMatcher> matchBlocks;
     private final Set<String> matchTiles;
+    private final List<BlockStateMatcher> facingBlocks;
     private final BlockFaceMatcher faceMatcher;
     private final int connectType;
     private final boolean innerSeams;
@@ -160,6 +161,8 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         if (matchBlocks.isEmpty() && matchTiles.isEmpty()) {
             matchTiles.add(baseFilename);
         }
+        facingBlocks = getBlockList(
+            properties.getString("facingBlocks", ""), properties.getString("facingMetadata", ""));
 
         faceMatcher = BlockFaceMatcher.create(properties.getString("faces", ""));
 
@@ -476,6 +479,9 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         if (faceMatcher != null && !faceMatcher.match(renderBlockState)) {
             return null;
         }
+        if (!facingBlocks.isEmpty() && !matchesFacingBlock(blockAccess, x, y, z, renderBlockState.getBlockFace())) {
+            return null;
+        }
         if (height != null && !height.get(y)) {
             return null;
         }
@@ -483,6 +489,28 @@ public abstract class TileOverride implements Comparable<TileOverride> {
             return null;
         }
         return getTileWorld_Impl(renderBlockState, origIcon);
+    }
+
+    /**
+     * Checks whether the block directly in front of this face (the face-normal neighbor, i.e. what this face is
+     * actually looking at -- never one of the 8 coplanar neighbors used by connect=) matches one of facingBlocks.
+     * Used to gate whether this override applies to a given face at all, e.g. "only CTM this stone face when it's
+     * facing lava".
+     */
+    private boolean matchesFacingBlock(IBlockAccess blockAccess, int x, int y, int z, int blockFace) {
+        if (blockFace < 0) {
+            return false;
+        }
+        int[] normal = NORMALS[blockFace];
+        x += normal[0];
+        y += normal[1];
+        z += normal[2];
+        for (BlockStateMatcher matcher : facingBlocks) {
+            if (matcher.match(blockAccess, x, y, z)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public final IIcon getTileHeld(RenderBlockState renderBlockState, IIcon origIcon) {
