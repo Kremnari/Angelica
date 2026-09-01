@@ -163,6 +163,13 @@ abstract public class TileOverrideIterator implements Iterator<TileOverride> {
                     if (candidate.isDisabled() || claimedLayers.contains(candidate.getRenderLayer())) {
                         continue;
                     }
+                    // Cheapest, most-discriminating check first: the face-normal neighbor is a single resolved
+                    // value shared by every candidate on this face (see RenderBlockState.getAbuttingNeighborBlock),
+                    // so a abuttingBlocks mismatch rejects this candidate before it ever reaches the heavier
+                    // filter/faceMatcher/height/biomes/neighbor-bit gates inside getTileWorld().
+                    if (candidate.hasAbuttingBlocks() && !candidate.matchesAbuttingBlock(renderBlockState)) {
+                        continue;
+                    }
                     if (!renderBlockState.match(matcher)) {
                         continue;
                     }

@@ -68,6 +68,42 @@ abstract public class RenderBlockState {
     protected int dy;
     protected int dz;
 
+    // Lazily resolved, once per (block, face): the block/metadata directly in front of the current face (the
+    // face-normal neighbor abuttingBlocks= gates against). Unlike connect='s 8 coplanar neighbors, there is only
+    // ever one of these for a given block+face, so every TileOverride checking abuttingBlocks against the same
+    // render state shares this single lookup instead of each re-querying blockAccess independently.
+    protected boolean abuttingNeighborComputed;
+    protected Block abuttingNeighborBlock;
+    protected int abuttingNeighborMetadata;
+
+    final Block getAbuttingNeighborBlock() {
+        computeAbuttingNeighbor();
+        return abuttingNeighborBlock;
+    }
+
+    final int getAbuttingNeighborMetadata() {
+        computeAbuttingNeighbor();
+        return abuttingNeighborMetadata;
+    }
+
+    private void computeAbuttingNeighbor() {
+        if (abuttingNeighborComputed) {
+            return;
+        }
+        abuttingNeighborComputed = true;
+        abuttingNeighborBlock = null;
+        int face = getBlockFace();
+        if (blockAccess == null || face < 0) {
+            return;
+        }
+        int[] normal = NORMALS[face];
+        int nx = getX() + normal[0];
+        int ny = getY() + normal[1];
+        int nz = getZ() + normal[2];
+        abuttingNeighborBlock = blockAccess.getBlock(nx, ny, nz);
+        abuttingNeighborMetadata = blockAccess.getBlockMetadata(nx, ny, nz);
+    }
+
     final public IBlockAccess getBlockAccess() {
         return blockAccess;
     }
@@ -100,6 +136,7 @@ abstract public class RenderBlockState {
         offsetsComputed = false;
         haveOffsets = false;
         dx = dy = dz = 0;
+        abuttingNeighborComputed = false;
         setFilter(null);
     }
 

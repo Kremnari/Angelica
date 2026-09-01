@@ -59,6 +59,7 @@ final class BlockOrientation extends RenderBlockState {
         offsetsComputed = false;
         haveOffsets = false;
         dx = dy = dz = 0;
+        abuttingNeighborComputed = false;
         flipped = false;
     }
 
@@ -198,6 +199,9 @@ final class BlockOrientation extends RenderBlockState {
         copy.dx = dx;
         copy.dy = dy;
         copy.dz = dz;
+        copy.abuttingNeighborComputed = abuttingNeighborComputed;
+        copy.abuttingNeighborBlock = abuttingNeighborBlock;
+        copy.abuttingNeighborMetadata = abuttingNeighborMetadata;
         return copy;
     }
 
@@ -212,6 +216,7 @@ final class BlockOrientation extends RenderBlockState {
         metadata = altMetadata = blockAccess.getBlockMetadata(x, y, z);
         iCtmBlock = block instanceof ICTMBlock;
         offsetsComputed = false;
+        abuttingNeighborComputed = false;
     }
 
     void setFace(int face) {
@@ -221,6 +226,7 @@ final class BlockOrientation extends RenderBlockState {
         textureFace = blockFaceToTextureFace(blockFace);
         metadataBits = (1 << metadata) | (1 << altMetadata);
         flipped = !fixedBottomFaceUV && blockFace == ForgeDirection.DOWN.ordinal();
+        abuttingNeighborComputed = false;
     }
 
     void setBlockMetadata(Block block, int metadata, int face) {

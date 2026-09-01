@@ -43,7 +43,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
     private final int weight;
     private final List<BlockStateMatcher> matchBlocks;
     private final Set<String> matchTiles;
-    private final List<BlockStateMatcher> facingBlocks;
+    private final List<BlockStateMatcher> abuttingBlocks;
     private final BlockFaceMatcher faceMatcher;
     private final int connectType;
     private final boolean innerSeams;
@@ -161,8 +161,8 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         if (matchBlocks.isEmpty() && matchTiles.isEmpty()) {
             matchTiles.add(baseFilename);
         }
-        facingBlocks = getBlockList(
-            properties.getString("facingBlocks", ""), properties.getString("facingMetadata", ""));
+        abuttingBlocks = getBlockList(
+            properties.getString("abuttingBlocks", ""), properties.getString("abuttingMetadata", ""));
 
         faceMatcher = BlockFaceMatcher.create(properties.getString("faces", ""));
 
@@ -479,7 +479,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         if (faceMatcher != null && !faceMatcher.match(renderBlockState)) {
             return null;
         }
-        if (!facingBlocks.isEmpty() && !matchesFacingBlock(blockAccess, x, y, z, renderBlockState.getBlockFace())) {
+        if (!abuttingBlocks.isEmpty() && !matchesAbuttingBlock(renderBlockState)) {
             return null;
         }
         if (height != null && !height.get(y)) {
@@ -491,22 +491,30 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         return getTileWorld_Impl(renderBlockState, origIcon);
     }
 
+    // Package-visible so TileOverrideIterator's multi-layer Collector can pre-filter candidates by abuttingBlocks
+    // before ever calling getTileWorld() on them -- see matchesAbuttingBlock below.
+    final boolean hasAbuttingBlocks() {
+        return !abuttingBlocks.isEmpty();
+    }
+
     /**
      * Checks whether the block directly in front of this face (the face-normal neighbor, i.e. what this face is
-     * actually looking at -- never one of the 8 coplanar neighbors used by connect=) matches one of facingBlocks.
+     * actually looking at -- never one of the 8 coplanar neighbors used by connect=) matches one of abuttingBlocks.
      * Used to gate whether this override applies to a given face at all, e.g. "only CTM this stone face when it's
-     * facing lava".
+     * abutting lava".
+     * <p>
+     * The face-normal neighbor itself is resolved once per (block, face) on {@code renderBlockState} and shared
+     * across every override checking it -- see {@link RenderBlockState#getAbuttingNeighborBlock()} -- since unlike
+     * connect='s 8 coplanar neighbors, there is only ever one possible answer here for a given render state.
      */
-    private boolean matchesFacingBlock(IBlockAccess blockAccess, int x, int y, int z, int blockFace) {
-        if (blockFace < 0) {
+    final boolean matchesAbuttingBlock(RenderBlockState renderBlockState) {
+        Block neighbor = renderBlockState.getAbuttingNeighborBlock();
+        if (neighbor == null) {
             return false;
         }
-        int[] normal = NORMALS[blockFace];
-        x += normal[0];
-        y += normal[1];
-        z += normal[2];
-        for (BlockStateMatcher matcher : facingBlocks) {
-            if (matcher.match(blockAccess, x, y, z)) {
+        int metadata = renderBlockState.getAbuttingNeighborMetadata();
+        for (BlockStateMatcher matcher : abuttingBlocks) {
+            if (matcher.match(neighbor, metadata)) {
                 return true;
             }
         }
