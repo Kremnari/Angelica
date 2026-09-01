@@ -216,15 +216,39 @@ public abstract class MixinRenderBlocks implements ExtCeleritasRenderBlocks {
         // If it has nothing to paint for this neighbor state, we leave ci uncancelled so vanilla paints the
         // plain icon, and we don't attempt the higher layers -- they're overlays on top of the floor, not a
         // replacement for it.
+        //
+        // The topmost layer (the one actually facing the camera) is painted at the block's true, unnudged
+        // bounds; every layer beneath it is pushed inward instead, one ULP further per step down the stack.
+        // That keeps the visually-foremost surface exactly where anything else that reasons about "the block's
+        // real bounds" expects it to be (e.g. the vanilla block-damage overlay's own glPolygonOffset, or the
+        // selection outline) -- rather than the old scheme, which left the floor at the true bounds and pushed
+        // the overlay outward past it. Net relative spacing between layers is identical either way; only the
+        // anchor point moves. Implemented as a pre-nudge-inward-then-walk-back-out so the array itself never
+        // needs reversing: nextUp/nextDown are exact inverses, so undoing one inward step per remaining layer
+        // lands the last layer back on precisely the original bounds.
+        int extraLayers = compacts.length - 1;
+        if (extraLayers == 0) {
+            if (compacts[0].getProcessor().processFace(rb, renderBlockState, icon, face)) {
+                ci.cancel();
+            }
+            return;
+        }
+
+        double minX = rb.renderMinX, minY = rb.renderMinY, minZ = rb.renderMinZ;
+        double maxX = rb.renderMaxX, maxY = rb.renderMaxY, maxZ = rb.renderMaxZ;
+        for (int i = 0; i < extraLayers; i++) {
+            angelica$nudgeFaceInward(rb, face);
+        }
         if (compacts[0].getProcessor().processFace(rb, renderBlockState, icon, face)) {
             for (int i = 1; i < compacts.length; i++) {
-                // Nudge one ULP further outward along this face's normal each layer, so each stacked quad
-                // occupies a distinct plane instead of z-fighting with the one under it -- the same trick
-                // GregTech's SBRWorldContext uses to draw its ore base+overlay textures.
                 angelica$nudgeFaceOutward(rb, face);
                 compacts[i].getProcessor().processFace(rb, renderBlockState, icon, face);
             }
             ci.cancel();
+        } else {
+            // Floor had nothing to paint -- restore the bounds we pre-nudged so vanilla's own subsequent
+            // rendering sees exactly the bounds it originally set up, untouched.
+            rb.setRenderBounds(minX, minY, minZ, maxX, maxY, maxZ);
         }
     }
 
@@ -237,6 +261,19 @@ public abstract class MixinRenderBlocks implements ExtCeleritasRenderBlocks {
             case 3 -> rb.renderMaxZ = Math.nextUp(rb.renderMaxZ);   // Z+
             case 4 -> rb.renderMinX = Math.nextDown(rb.renderMinX); // X-
             case 5 -> rb.renderMaxX = Math.nextUp(rb.renderMaxX);   // X+
+        }
+    }
+
+    @Unique
+    private static void angelica$nudgeFaceInward(RenderBlocks rb, int face) {
+        // Exact inverse of angelica$nudgeFaceOutward, one ULP toward the block's interior instead of away from it.
+        switch (face) {
+            case 0 -> rb.renderMinY = Math.nextUp(rb.renderMinY);   // Y-
+            case 1 -> rb.renderMaxY = Math.nextDown(rb.renderMaxY); // Y+
+            case 2 -> rb.renderMinZ = Math.nextUp(rb.renderMinZ);   // Z-
+            case 3 -> rb.renderMaxZ = Math.nextDown(rb.renderMaxZ); // Z+
+            case 4 -> rb.renderMinX = Math.nextUp(rb.renderMinX);   // X-
+            case 5 -> rb.renderMaxX = Math.nextDown(rb.renderMaxX); // X+
         }
     }
 
