@@ -212,6 +212,20 @@ public abstract class MixinRenderBlocks implements ExtCeleritasRenderBlocks {
         RenderBlocks rb = (RenderBlocks) (Object) this;
         int face = direction.ordinal();
 
+        if (rb.hasOverrideBlockTexture()) {
+            // Something else (vanilla's own block-damage/mining-crack overlay via renderBlockUsingTexture, or
+            // any other caller that forces a specific icon via setOverrideBlockTexture) wants this exact face
+            // drawn with that specific icon, not whatever CTM would normally paint here. CTM's own icon
+            // selection still runs and still populates CURRENT_COMPACT regardless of overrideBlockTexture --
+            // vanilla always computes the "normal" icon first and only substitutes overrideBlockTexture
+            // afterward (e.g. RenderBlocks.renderFaceYNeg's own "if (hasOverrideBlockTexture()) icon =
+            // overrideBlockTexture;" as its first statement) -- so this context is genuinely fresh here, not
+            // stale. Defer entirely, for every layer in the stack, before touching renderMinX/Y/Z or
+            // renderMaxX/Y/Z at all -- matching how classic method=ctm already behaves here by construction,
+            // and how the single-layer compact bridge handles it (see ctm-compact-override-texture-fix).
+            return;
+        }
+
         // renderLayer=0 (compacts[0]) is the floor: it alone decides whether this face is CTM-managed at all.
         // If it has nothing to paint for this neighbor state, we leave ci uncancelled so vanilla paints the
         // plain icon, and we don't attempt the higher layers -- they're overlays on top of the floor, not a
