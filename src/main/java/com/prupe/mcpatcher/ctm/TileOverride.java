@@ -48,6 +48,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
     private final List<BlockStateMatcher> matchBlocks;
     private final Set<String> matchTiles;
     private final List<BlockStateMatcher> connectBlocks;
+    private final List<BlockStateMatcher> abuttingBlocks;
     private final BlockFaceMatcher faceMatcher;
     private final int connectType;
     private final boolean innerSeams;
@@ -169,7 +170,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
             matchTiles.add(baseFilename);
         }
         connectBlocks = getBlockList(properties.getString("connectBlocks", ""), properties.getString("connectMetadata", ""));
-
+        abuttingBlocks = getBlockList(properties.getString("abuttingBlocks", ""), properties.getString("abuttingMetaData", ""));
         faceMatcher = BlockFaceMatcher.create(properties.getString("faces", ""));
 
         String connectType1 = properties.getString("connect", "")
@@ -542,6 +543,9 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         if (faceMatcher != null && !faceMatcher.match(renderBlockState)) {
             return null;
         }
+        if (!abuttingBlocks.isEmpty() && !matchesAbuttingBlock(blockAccess, x,y,z, renderBlockState.getBlockFace())) {
+            return null;
+        }
         if (height != null && !height.get(y)) {
             return null;
         }
@@ -549,6 +553,22 @@ public abstract class TileOverride implements Comparable<TileOverride> {
             return null;
         }
         return getTileWorld_Impl(renderBlockState, origIcon);
+    }
+
+    private boolean matchesAbuttingBlock(IBlockAccess blockAccess, int x, int y, int z, int blockFace) {
+        if (blockFace < 0) {
+            return false;
+        }
+        int[] normal = NORMALS[blockFace];
+        x += normal[0];
+        y += normal[1];
+        z += normal[2];
+        for (BlockStateMatcher matcher : abuttingBlocks) {
+            if (matcher.match(blockAccess, x, y , z)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public final IIcon getTileHeld(RenderBlockState renderBlockState, IIcon origIcon) {
