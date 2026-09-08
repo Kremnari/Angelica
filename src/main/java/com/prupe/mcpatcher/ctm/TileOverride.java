@@ -40,6 +40,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
     private final String baseFilename;
     protected final TileLoader tileLoader;
     protected final int renderPass;
+    private final int renderLayer;
     private final int weight;
     private boolean lostScope;
     private final int registrationOrder = nextRegistrationOrder++;
@@ -48,7 +49,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
     private final List<BlockStateMatcher> connectBlocks;
     private final BlockFaceMatcher faceMatcher;
     private final int connectType;
-    private final boolean innerSeams;
+x    private final boolean innerSeams;
     private final BitSet biomes;
     private final BitSet height;
 
@@ -208,6 +209,7 @@ public abstract class TileOverride implements Comparable<TileOverride> {
                 RenderPassAPI.instance.getRenderPassName(renderPass));
         }
 
+        renderLayer = properties.getInt("renderLayer", 0);
         weight = properties.getInt("weight", 0);
     }
 
@@ -378,6 +380,9 @@ public abstract class TileOverride implements Comparable<TileOverride> {
     final public int getRenderPass() {
         //Angelica only supports two passes, although -1 is valid from RenderPassAPI.
         return renderPass < 0 ? renderPass : (renderPass == 0 ? 0 : 1);
+    }
+    final public int getRenderLayer() {
+        return renderLayer;
     }
 
     final public int getWeight() {
