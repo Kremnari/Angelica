@@ -9,6 +9,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+
+import net.minecraft.init.Blocks;
+import net.minecraft.item.ItemStack;
+import net.minecraftforge.oredict.OreDictionary;
 
 import net.coderbot.iris.shaderpack.materialmap.BlockEntry;
 import net.coderbot.iris.shaderpack.materialmap.FlatteningMap;
@@ -150,6 +158,41 @@ public class BlockAPI {
             source.fine("unknown block %s:%s", namespace, blockName);
         }
         return matchers;
+    }
+
+    public static List<BlockStateMatcher> createOreDictMatchers(PropertiesFile source, String oreTag) {
+        List<ItemStack> stacks = OreDictionary.getOres(oreTag);
+        if(stacks.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Map<Block, Set<Integer>> byBlock = new LinkedHashMap<>();
+        Set<Block> wildcardBlocks = new HashSet<>();
+
+        for (ItemStack stack : stacks) {
+            Block block = Block.getBlockFromItem(stack.getItem());
+            if (block == null || block == Blocks.air) {
+                continue;
+            }
+            int meta = stack.getItemDamage();
+            if (meta == OreDictionary.WILDCARD_VALUE) {
+                wildcardBlocks.add(block);
+            } else {
+                byBlock.computeIfAbsent(block, b -> new TreeSet<>()).add(meta);
+            }
+        }
+
+        List<BlockStateMatcher> result = new ArrayList<>();
+        for (Block block : wildcardBlocks) {
+            result.add(new BlockStateMatcher("[ore:"+oreTag+"]", block, ""));
+        }
+        for (Map.Entry<Block, Set<Integer>> e : byBlock.entrySet()) {
+            if (wildcardBlocks.contains(e.getKey())) {
+                continue;
+            }
+            String metaList = e.getValue().stream().map(String::valueOf).collect(Collectors.joining(" "));
+            result.add(new BlockStateMatcher("[ore:" + oreTag + "]", e.getKey(), metaList));
+        }
+        return result;
     }
 
     private static String intersectMetadata(String explicitMetadata, Set<Integer> entryMetas) {
