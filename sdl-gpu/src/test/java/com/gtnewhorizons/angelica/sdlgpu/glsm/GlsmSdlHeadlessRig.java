@@ -11,6 +11,7 @@ import com.gtnewhorizons.angelica.sdlgpu.SDLGPURenderBackend;
 import com.gtnewhorizons.angelica.sdlgpu.SdlTestRig;
 import com.gtnewhorizons.angelica.sdlgpu.pipeline.PipelineCache;
 import com.gtnewhorizons.angelica.sdlgpu.resource.ResourceManager;
+import it.unimi.dsi.fastutil.ints.Int2IntMap;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
@@ -42,7 +43,7 @@ public final class GlsmSdlHeadlessRig {
         Reflect.setStatic(SDLGPUGate.class, "engaged", true);
 
         final RenderBackend backend = BackendManager.RENDER_BACKEND;
-        assumeTrue(backend instanceof SDLGPURenderBackend, () -> "selected backend is " + backend.getName());
+        assertTrue(backend instanceof SDLGPURenderBackend, () -> "selected backend is " + backend.getName());
 
         backend.onPostWindowCreate(0L);
         Reflect.setStaticFinal(GLStateManager.class, "MainThread", Thread.class, Thread.currentThread());
@@ -50,7 +51,6 @@ public final class GlsmSdlHeadlessRig {
         GLStateManager.initialize(GLSMInitConfig.builder()
             .displaySize(SIZE, SIZE)
             .directDrawer(TessellatorStreamingDrawer::drawDirect)
-            .streamingDrawerDestroy(TessellatorStreamingDrawer::destroy)
             .build());
         GLStateManager.setRunningSplash(false);
         GLStateManager.markSplashComplete("glsmSdlHeadlessRig");
@@ -85,7 +85,13 @@ public final class GlsmSdlHeadlessRig {
         endFrame();
     }
 
-    private static int colorTargetSdlFormat() {
+    public static int glsmBufferBinding(int target) {
+        final Object ctx = Reflect.getStatic(GLStateManager.class, "primaryContext");
+        final Int2IntMap bound = Reflect.get(ctx, "boundOtherBuffers");
+        return bound.get(target);
+    }
+
+    static int colorTargetSdlFormat() {
         final ResourceManager rm = Reflect.get(BackendManager.RENDER_BACKEND, "resourceManager");
         final ResourceManager.TextureMeta meta = rm.getTextureMeta(colorTexture);
         return meta != null ? meta.sdlFormat() : 0;
@@ -110,9 +116,53 @@ public final class GlsmSdlHeadlessRig {
         GLStateManager.glViewport(0, 0, SIZE, SIZE);
     }
 
+    public static int createDepthStencilFbo() {
+        final int color = GLStateManager.glGenTextures();
+        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
+        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, color);
+        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        GLStateManager.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, SIZE, SIZE, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (ByteBuffer) null);
+
+        final int depth = GLStateManager.glGenRenderbuffers();
+        GLStateManager.glBindRenderbuffer(GL30.GL_RENDERBUFFER, depth);
+        GLStateManager.glRenderbufferStorage(GL30.GL_RENDERBUFFER, GL30.GL_DEPTH24_STENCIL8, SIZE, SIZE);
+
+        final int fbo = GLStateManager.glGenFramebuffers();
+        GLStateManager.glBindFramebuffer(GL30.GL_FRAMEBUFFER, fbo);
+        GLStateManager.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, color, 0);
+        GLStateManager.glFramebufferRenderbuffer(GL30.GL_FRAMEBUFFER, GL30.GL_DEPTH_STENCIL_ATTACHMENT, GL30.GL_RENDERBUFFER, depth);
+        return fbo;
+    }
+
+    public static void writeStencilOneInBottomHalf() {
+        GLStateManager.glClearStencil(0);
+        GLStateManager.glStencilMask(0xFF);
+        GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT | GL11.GL_STENCIL_BUFFER_BIT);
+        GLStateManager.glEnable(GL11.GL_STENCIL_TEST);
+        GLStateManager.glStencilFunc(GL11.GL_ALWAYS, 1, 0xFF);
+        GLStateManager.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_REPLACE);
+        halfQuad(-1.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        GLStateManager.glDisable(GL11.GL_STENCIL_TEST);
+    }
+
+    public static void drawRedWhereStencilIsOne() {
+        GLStateManager.glEnable(GL11.GL_STENCIL_TEST);
+        GLStateManager.glStencilFunc(GL11.GL_EQUAL, 1, 0xFF);
+        GLStateManager.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP);
+        solidQuad(1.0f, 0.0f, 0.0f);
+        GLStateManager.glDisable(GL11.GL_STENCIL_TEST);
+    }
+
     public static void clearTo(float r, float g, float b, float a) {
         GLStateManager.glClearColor(r, g, b, a);
         GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+    }
+
+    public static void beginFrameAndClear() {
+        beginFrame();
+        bindTarget();
+        clearTo(0.0f, 0.0f, 0.0f, 1.0f);
     }
 
     public static void beginFrameAndReset() {

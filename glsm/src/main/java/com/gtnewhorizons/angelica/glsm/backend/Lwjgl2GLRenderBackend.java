@@ -135,6 +135,12 @@ public final class Lwjgl2GLRenderBackend extends RenderBackend {
     }
 
     @Override
+    public void updateDisplayFromWorkerThread(boolean processMessages) {
+        if (processMessages) pumpDisplayMessages();
+        Display.update(false);
+    }
+
+    @Override
     public void flush() {GL11.glFlush();}
 
     @Override
@@ -644,6 +650,11 @@ public final class Lwjgl2GLRenderBackend extends RenderBackend {
     @Override
     public void readPixels(int x, int y, int width, int height, int format, int type, IntBuffer pixels) {
         GL11.glReadPixels(x, y, width, height, format, type, pixels);
+    }
+
+    @Override
+    public void readPixels(int x, int y, int width, int height, int format, int type, long pixelBufferOffset) {
+        GL11.glReadPixels(x, y, width, height, format, type, pixelBufferOffset);
     }
 
     @Override

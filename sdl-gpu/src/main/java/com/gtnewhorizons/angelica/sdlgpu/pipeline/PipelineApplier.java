@@ -58,6 +58,7 @@ public final class PipelineApplier {
     private final SamplerBinder samplerBinder;
     private final StorageTextureBinder storageTextureBinder;
     private final StorageBufferBinder storageBufferBinder;
+    private final LogicOpEmulator logicOpEmulator;
 
     private DrawDispatch.FanUploadSink deferredUploadSink;
     public void setDeferredUploadSink(DrawDispatch.FanUploadSink sink) { this.deferredUploadSink = sink; }
@@ -69,7 +70,10 @@ public final class PipelineApplier {
     private final IntOpenHashSet dummyVboZeroWarned        = new IntOpenHashSet();
     private final IntOpenHashSet staleFboWarned            = new IntOpenHashSet();
     private final LongOpenHashSet bogusScissorWarned       = new LongOpenHashSet();
+    private final LongOpenHashSet clampedScissorWarned     = new LongOpenHashSet();
     private final IntOpenHashSet pushUniformsNullCbWarned  = new IntOpenHashSet();
+
+    private final int[] scissorRect = new int[4];
 
     public PipelineApplier(FrameManager frameManager, ResourceManager resourceManager, ShaderManager shaderManager, PipelineStore pipelineStore, FBOClearTracker fboClearTracker, PersistentBufferSync persistentSync, SamplerBinder samplerBinder, StorageTextureBinder storageTextureBinder, StorageBufferBinder storageBufferBinder) {
         this.frameManager = frameManager;
@@ -81,6 +85,16 @@ public final class PipelineApplier {
         this.samplerBinder = samplerBinder;
         this.storageTextureBinder = storageTextureBinder;
         this.storageBufferBinder = storageBufferBinder;
+        this.logicOpEmulator = new LogicOpEmulator(frameManager, resourceManager, shaderManager, this);
+    }
+
+    public void ensureDrawRenderPass(ContextState st) {
+        ensureDrawRenderPass(st, frameManager.frame());
+    }
+
+    public void ensureDrawRenderPass(ContextState st, FrameState f) {
+        logicOpEmulator.beforeDraw(st, f);
+        ensureRenderPass(st, f);
     }
 
     public void ensureRenderPass(ContextState st) {
@@ -100,11 +114,11 @@ public final class PipelineApplier {
         }
 
         if (!st.deferUploads && f.renderPass != 0 && st.attribDefaultsDirtyMask != 0 && (st.attribDefaultsDirtyMask & ~st.currentVao.attribEnabledMask) != 0) {
-            frameManager.endRenderPassIfActive(f);
+            frameManager.endRenderPassIfActive(f, FrameManager.PASS_END_COPY);
         }
 
         if (f.renderPass != 0 && st.anyUniformBlockDirty()) {
-            frameManager.endRenderPassIfActive(f);
+            frameManager.endRenderPassIfActive(f, FrameManager.PASS_END_UNIFORM_BLOCK);
             if (Tracy.ENABLED) frameManager.notePerFrameBlockPassBreak();
         }
 
@@ -157,16 +171,11 @@ public final class PipelineApplier {
         final boolean proposedStencilClear;
         final boolean depthHasStencil = fbo.depthTexture != 0 && PixelOps.isDepthStencilFormat(fbo.depthFormat);
         if (fbo.depthTexture != 0) {
+            final boolean defined = resourceManager.isTextureContentDefined(fbo.depthTexture);
             final boolean pendingClear = st.pendingDepthTextures.contains(fbo.depthTexture);
-            final boolean firstUse = !pendingClear && !st.clearedTexturesThisFrame.contains(fbo.depthTexture);
-            proposedDepthClear = pendingClear || firstUse;
+            proposedDepthClear = pendingClear || !defined;
             final boolean pendingStencil = depthHasStencil && st.pendingStencilTextures.contains(fbo.depthTexture);
-            if (depthHasStencil) {
-                final boolean firstStencilUse = !pendingStencil && !st.clearedStencilTexturesThisFrame.contains(fbo.depthTexture);
-                proposedStencilClear = pendingStencil || firstStencilUse;
-            } else {
-                proposedStencilClear = false;
-            }
+            proposedStencilClear = depthHasStencil && (pendingStencil || !defined);
             layoutHash = Hashing.fmix64(layoutHash, fbo.depthTexture);
             if (proposedDepthClear) {
                 layoutHash = foldClearDepth(layoutHash, pendingClear ? st.pendingDepthValues.get(fbo.depthTexture) : st.depthClearValue);
@@ -179,7 +188,7 @@ public final class PipelineApplier {
             proposedStencilClear = false;
         }
 
-        frameManager.endRenderPassIfActive(f);
+        frameManager.endRenderPassIfActive(f, FrameManager.PASS_END_TARGET);
 
         final boolean reuse = fbo.cachedTargetsValid && fbo.cachedTargetsLayoutHash == layoutHash && fbo.cachedTargetsCount == totalTargets && fbo.cachedClearOpFlags == proposedClearOps && fbo.cachedDepthClearLast == proposedDepthClear && fbo.cachedStencilClearLast == proposedStencilClear;
 
@@ -271,11 +280,8 @@ public final class PipelineApplier {
         }
         if (fbo.depthTexture == 0) return;
         st.pendingDepthTextures.remove(fbo.depthTexture);
-        if (depthClear) st.clearedTexturesThisFrame.add(fbo.depthTexture);
-        if (depthHasStencil) {
-            st.pendingStencilTextures.remove(fbo.depthTexture);
-            if (stencilClear) st.clearedStencilTexturesThisFrame.add(fbo.depthTexture);
-        }
+        if (depthHasStencil) st.pendingStencilTextures.remove(fbo.depthTexture);
+        if (depthClear || stencilClear) rm.markTextureContentDefined(fbo.depthTexture);
     }
 
     static long foldClearColor(long h, float r, float g, float b, float a) {
@@ -461,39 +467,54 @@ public final class PipelineApplier {
         }
 
         if (st.scissorDirty) {
-            final long addr = st.cachedScissor.address();
             final int sx, sy, sw, sh;
             if (st.scissorEnabled) {
                 sx = st.scissorX;
                 sy = renderingToFbo ? st.scissorY : (fbo0Height(st) - st.scissorY - st.scissorH);
                 sw = st.scissorW;
                 sh = st.scissorH;
-                MemoryAccess.putInt(addr + SDL_Rect.X, sx);
-                MemoryAccess.putInt(addr + SDL_Rect.Y, sy);
-                MemoryAccess.putInt(addr + SDL_Rect.W, sw);
-                MemoryAccess.putInt(addr + SDL_Rect.H, sh);
                 if ((sw <= 0 || sh <= 0) && bogusScissorWarned.add(Hashing.packHiLo(sw, sh))) {
                     LOG.warn("applyPipelineAndState: scissor degenerate (x={} y={} w={} h={}) - all fragments clipped; boundProgram={} boundFbo={} scissorEn={} src=[{},{},{},{}]", sx, sy, sw, sh, st.boundProgram, st.boundFboId, st.scissorEnabled, st.scissorX, st.scissorY, st.scissorW, st.scissorH);
                 }
             } else {
-                final int rectY = renderingToFbo ? (int) st.viewportY : (int) (fbo0Height(st) - st.viewportY - st.viewportH);
-                MemoryAccess.putInt(addr + SDL_Rect.X, (int) st.viewportX);
-                MemoryAccess.putInt(addr + SDL_Rect.Y, rectY);
-                MemoryAccess.putInt(addr + SDL_Rect.W, (int) st.viewportW);
-                MemoryAccess.putInt(addr + SDL_Rect.H, (int) st.viewportH);
+                sx = (int) st.viewportX;
+                sy = renderingToFbo ? (int) st.viewportY : (int) (fbo0Height(st) - st.viewportY - st.viewportH);
+                sw = (int) st.viewportW;
+                sh = (int) st.viewportH;
             }
+
+            final boolean haveFboSize = renderingToFbo && fboState != null;
+            final int targetW = haveFboSize ? fboState.width : frameManager.getFbo0Width();
+            final int targetH = haveFboSize ? fboState.height : frameManager.getFbo0Height();
+            final boolean nonEmpty = ScissorClamp.clamp(sx, sy, sw, sh, targetW, targetH, scissorRect);
+            final int cx = scissorRect[ScissorClamp.X];
+            final int cy = scissorRect[ScissorClamp.Y];
+            final int cw = scissorRect[ScissorClamp.W];
+            final int ch = scissorRect[ScissorClamp.H];
+            if ((cx != sx || cy != sy || cw != sw || ch != sh) && clampedScissorWarned.add(Hashing.packHiLo(st.boundProgram, st.boundFboId))) {
+                LOG.warn("applyPipelineAndState: scissor (x={} y={} w={} h={}) is outside the {}x{} target - clamped to (x={} y={} w={} h={}); boundProgram={} boundFbo={} scissorEn={}", sx, sy, sw, sh, targetW, targetH, cx, cy, cw, ch, st.boundProgram, st.boundFboId, st.scissorEnabled);
+            }
+            if (!nonEmpty) return false;
+
+            final long addr = st.cachedScissor.address();
+            MemoryAccess.putInt(addr + SDL_Rect.X, cx);
+            MemoryAccess.putInt(addr + SDL_Rect.Y, cy);
+            MemoryAccess.putInt(addr + SDL_Rect.W, cw);
+            MemoryAccess.putInt(addr + SDL_Rect.H, ch);
             SDL_SetGPUScissor(rp, st.cachedScissor);
             st.scissorDirty = false;
         }
 
         if (st.blendColorDirty) {
-            final long addr = st.cachedBlendColor.address();
-            MemoryAccess.putFloat(addr + SDL_FColor.R, st.blendColorR);
-            MemoryAccess.putFloat(addr + SDL_FColor.G, st.blendColorG);
-            MemoryAccess.putFloat(addr + SDL_FColor.B, st.blendColorB);
-            MemoryAccess.putFloat(addr + SDL_FColor.A, st.blendColorA);
-            SDL_SetGPUBlendConstants(rp, st.cachedBlendColor);
-            st.blendColorDirty = false;
+            if (st.pipeline.usesBlendConstants()) {
+                final long addr = st.cachedBlendColor.address();
+                MemoryAccess.putFloat(addr + SDL_FColor.R, st.blendColorR);
+                MemoryAccess.putFloat(addr + SDL_FColor.G, st.blendColorG);
+                MemoryAccess.putFloat(addr + SDL_FColor.B, st.blendColorB);
+                MemoryAccess.putFloat(addr + SDL_FColor.A, st.blendColorA);
+                SDL_SetGPUBlendConstants(rp, st.cachedBlendColor);
+                st.blendColorDirty = false;
+            }
         }
 
         if (st.pipeline.effectiveStencilTestEnabled() && st.stencilRef != st.lastAppliedStencilRef) {
@@ -535,7 +556,7 @@ public final class PipelineApplier {
                 final long elemAddr = st.vboBindingsAddr + (long) i * bindingSize;
                 if (vboHandle != 0) {
                     MemoryAccess.putAddress(elemAddr + SDL_GPUBufferBinding.BUFFER, vboHandle);
-                    MemoryAccess.putInt(elemAddr + SDL_GPUBufferBinding.OFFSET, (int) vao.bindingOffset[b]);
+                    MemoryAccess.putInt(elemAddr + SDL_GPUBufferBinding.OFFSET, PipelineCache.vertexOffsetBase(vao.bindingOffset[b]));
                 } else {
                     MemoryAccess.putAddress(elemAddr + SDL_GPUBufferBinding.BUFFER, dummyVBO);
                     MemoryAccess.putInt(elemAddr + SDL_GPUBufferBinding.OFFSET, i * 16);
@@ -677,10 +698,9 @@ public final class PipelineApplier {
 
     public float[] reuseOrAlloc(ContextState st, int location, int length) {
         final ShaderManager.ProgramObject prog = st.boundProgramObj;
-        if (prog != null && location >= 0 && location < prog.uniformSlotCount) {
-            final float[] existing = st.uniformStaging(prog).uniformDataBySlot[location];
-            if (existing != null && existing.length == length) return existing;
-        }
+        if (prog == null || location < 0 || location >= prog.uniformSlotCount) return null;
+        final float[] existing = st.uniformStaging(prog).uniformDataBySlot[location];
+        if (existing != null && existing.length == length) return existing;
         return new float[length];
     }
 
@@ -714,6 +734,7 @@ public final class PipelineApplier {
         for (int b = 0; b < ShaderManager.BLOCK_COUNT; b++) {
             flushUniformBlock(st, b);
         }
+        frameManager.endCopyPassIfActive();
     }
 
     private void flushUniformBlock(ContextState st, int b) {
@@ -737,13 +758,12 @@ public final class PipelineApplier {
         if (bytes == null) return;
         final long handle = resourceManager.getBufferHandle(block.glId);
         if (handle == 0) return;
-        final long copyPass = frameManager.ensureCopyPass();
+        final long copyPass = frameManager.ensureCopyPass(FrameManager.PASS_END_UNIFORM_BLOCK);
         if (copyPass == 0) return;
 
         bytes.position(0).limit(Math.min(size, bytes.capacity()));
 
         resourceManager.uploadToBuffer(copyPass, bytes, handle, 0, true);
-        frameManager.endCopyPassIfActive();
         block.dirty = false;
         block.flushedThisFrame = true;
         if (Tracy.ENABLED) frameManager.noteUniformBlockFlush(b, size);
@@ -828,11 +848,13 @@ public final class PipelineApplier {
         final int count = n / floatsPerMatrix;
         if (count == 0) {
             final float[] v = reuseOrAlloc(st, location, n);
+            if (v == null) return;
             value.get(value.position(), v);
             putUniform(st, location, v);
             return;
         }
         final float[] out = reuseOrAlloc(st, location, count * floatsPerMatrix);
+        if (out == null) return;
         MatrixMarshal.marshalMatrixToColumnMajor(value, value.position(), count, size, transpose, out, 0);
         putUniform(st, location, out);
     }

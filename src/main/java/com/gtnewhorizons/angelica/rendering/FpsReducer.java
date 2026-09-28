@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.rendering;
 import com.gtnewhorizons.angelica.rendering.ReducerStateMachine.State;
 
 import com.gtnewhorizons.angelica.AngelicaMod;
+import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.proxy.ClientProxy;
 import cpw.mods.fml.client.registry.ClientRegistry;
@@ -33,6 +34,7 @@ public final class FpsReducer {
     private static State applied;
     private static int appliedVolumePercent = 100;
     private static boolean configDirty;
+    private static boolean benchmarkActive;
     private static String hudText;
     private static long lastActiveMillis = Minecraft.getSystemTime();
     private static volatile int volumePercent = 100;
@@ -40,8 +42,8 @@ public final class FpsReducer {
     private FpsReducer() {}
 
     public static void init() {
-        forceKey = new KeyBinding("angelica.keybind.fps_reducer_force", 0, "key.categories.misc");
-        disableKey = new KeyBinding("angelica.keybind.fps_reducer_disable", 0, "key.categories.misc");
+        forceKey = new KeyBinding("angelica.keybind.fps_reducer_force", 0, AngelicaMod.KEY_CATEGORY);
+        disableKey = new KeyBinding("angelica.keybind.fps_reducer_disable", 0, AngelicaMod.KEY_CATEGORY);
         ClientRegistry.registerKeyBinding(forceKey);
         ClientRegistry.registerKeyBinding(disableKey);
         FMLCommonHandler.instance().bus().register(INSTANCE);
@@ -86,7 +88,18 @@ public final class FpsReducer {
         GLStateManager.setPresentSuppressed(next == State.MINIMIZED);
     }
 
+    public static void beginBenchmark() {
+        benchmarkActive = true;
+    }
+
+    public static void endBenchmark() {
+        benchmarkActive = false;
+    }
+
     public static int effectiveCap(int userLimit, boolean inMenu) {
+        if (benchmarkActive) {
+            return ReducerStateMachine.benchmarkCap(SystemProperties.FLYBY_PACING, userLimit);
+        }
         final SodiumGameOptions.ReducerSettings s = ClientProxy.options().reducer;
         final int stateCap = ReducerStateMachine.stateCap(MACHINE.state(), s.unfocusedFpsLimit, s.idleFpsLimit);
         return ReducerStateMachine.mergeCap(userLimit, stateCap, inMenu, s.limitMenuFrameRate);

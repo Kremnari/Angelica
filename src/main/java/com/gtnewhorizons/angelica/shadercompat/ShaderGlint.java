@@ -3,10 +3,13 @@ package com.gtnewhorizons.angelica.shadercompat;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
 import com.gtnewhorizons.angelica.glsm.hooks.GlintColorHandler;
+import com.gtnewhorizons.angelica.iris.IrisDisplayListState;
+import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
 import it.unimi.dsi.fastutil.ints.Int2IntLinkedOpenHashMap;
 import net.coderbot.iris.pipeline.ShadowRenderer;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.ITextureObject;
 import net.minecraft.util.ResourceLocation;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
@@ -27,7 +30,8 @@ import static org.joml.Math.clamp;
 public final class ShaderGlint {
 
     private static final ResourceLocation GLINT_MASK = new ResourceLocation("textures/misc/enchanted_item_glint.png");
-    private static final int MAX_CACHE = 64;
+    public static final int TINT_SLOTS = 64;
+    public static final int NO_TINT = -1;
 
     private static boolean maskLoaded;
     private static boolean maskFailed;
@@ -35,10 +39,11 @@ public final class ShaderGlint {
     private static int maskH;
     private static int[] maskLum;
 
-    private static final Int2IntLinkedOpenHashMap colorToTexture = new Int2IntLinkedOpenHashMap();
+    private static final Int2IntLinkedOpenHashMap colorToSlot = new Int2IntLinkedOpenHashMap();
     static {
-        colorToTexture.defaultReturnValue(0);
+        colorToSlot.defaultReturnValue(NO_TINT);
     }
+    private static final int[] slotTextures = new int[TINT_SLOTS];
 
     private static final GlintColorHandler COLOR_HANDLER = ShaderGlint::onColorChanged;
 
@@ -53,11 +58,13 @@ public final class ShaderGlint {
     private ShaderGlint() {}
 
     public static void beginGlint() {
-        if (ShadowRenderer.ACTIVE || !IrisApi.getInstance().isShaderPackInUse()) return;
+        IrisDisplayListState.recordGlintSpan(true);
 
         // If a glint span is already active, keep the outer span's saved state and
         // let the nested render ride on its handler.
         if (depth++ > 0) return;
+
+        if (ShadowRenderer.ACTIVE || !IrisApi.getInstance().isShaderPackInUse()) return;
 
         swapped = false;
         injecting = false;
@@ -70,12 +77,14 @@ public final class ShaderGlint {
     }
 
     public static void endGlint() {
+        IrisDisplayListState.recordGlintSpan(false);
         if (depth == 0 || --depth > 0) return;
         if (GLSMHooks.glintColorHandler != COLOR_HANDLER) return;
         GLSMHooks.glintColorHandler = null;
 
         if (swapped) {
             GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, prevTexture);
+            ModelPartBatcher.onTextureSwap(prevTexture, NO_TINT);
         }
         swapped = false;
         injecting = false;
@@ -84,35 +93,61 @@ public final class ShaderGlint {
     private static void onColorChanged(float red, float green, float blue, float alpha) {
         if (injecting) return;
 
-        final int texture = getTintedTexture(red, green, blue);
-        if (texture <= 0) return;
+        final int slot = tintSlot(red, green, blue);
+        if (slot < 0) return;
 
+        final int texture = slotTextures[slot];
         injecting = true;
         GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
         GLStateManager.glColor4f(1.0F, 1.0F, 1.0F, alpha);
         injecting = false;
         swapped = true;
+        ModelPartBatcher.onTextureSwap(texture, slot);
     }
 
-    private static int getTintedTexture(float r, float g, float b) {
+    public static void invalidate() {
+        for (int i = 0; i < slotTextures.length; i++) {
+            if (slotTextures[i] != 0) {
+                GLStateManager.glDeleteTextures(slotTextures[i]);
+                slotTextures[i] = 0;
+            }
+        }
+        colorToSlot.clear();
+        maskLum = null;
+        tintBuffer = null;
+        maskLoaded = false;
+        maskFailed = false;
+    }
+
+    public static void bindTintedGlint(int slot) {
+        if (slot < 0 || ShadowRenderer.ACTIVE || !IrisApi.getInstance().isShaderPackInUse()) return;
+        final ITextureObject mask = Minecraft.getMinecraft().getTextureManager().getTexture(GLINT_MASK);
+        if (mask == null || GLStateManager.getBoundTextureForServerState() != mask.getGlTextureId()) return;
+        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, slotTextures[slot]);
+    }
+
+    private static int tintSlot(float r, float g, float b) {
         ensureMaskLoaded();
-        if (!maskLoaded) return -1;
+        if (!maskLoaded) return NO_TINT;
 
         final int ri = clamp8(r);
         final int gi = clamp8(g);
         final int bi = clamp8(b);
         final int key = (ri << 16) | (gi << 8) | bi;
 
-        final int cached = colorToTexture.getAndMoveToLast(key);
-        if (cached != 0) return cached;
+        final int cached = colorToSlot.getAndMoveToLast(key);
+        if (cached != NO_TINT) return cached;
 
-        if (colorToTexture.size() >= MAX_CACHE) {
-            GLStateManager.glDeleteTextures(colorToTexture.remove(colorToTexture.firstIntKey()));
+        final int slot;
+        if (colorToSlot.size() >= TINT_SLOTS) {
+            slot = colorToSlot.remove(colorToSlot.firstIntKey());
+            GLStateManager.glDeleteTextures(slotTextures[slot]);
+        } else {
+            slot = colorToSlot.size();
         }
-
-        final int texture = uploadTinted(ri / 255.0F, gi / 255.0F, bi / 255.0F);
-        colorToTexture.putAndMoveToLast(key, texture);
-        return texture;
+        slotTextures[slot] = uploadTinted(ri / 255.0F, gi / 255.0F, bi / 255.0F);
+        colorToSlot.putAndMoveToLast(key, slot);
+        return slot;
     }
 
     private static int uploadTinted(float r, float g, float b) {

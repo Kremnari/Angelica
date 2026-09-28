@@ -2,7 +2,7 @@ package net.coderbot.batchedentityrendering.impl;
 
 import com.gtnewhorizon.gtnhlib.client.renderer.cel.model.quad.ModelQuad;
 import com.gtnewhorizons.angelica.compat.mojang.RenderLayer;
-import net.coderbot.batchedentityrendering.impl.SegmentedBufferBuilderTest.TestLayer;
+import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -19,7 +19,7 @@ class AngelicaBufferSourceTest {
     @Test
     void sameLayerKeepsBuilderAffinity() {
         final AngelicaBufferSource source = new AngelicaBufferSource();
-        final TestLayer layer = new TestLayer("a", TransparencyType.OPAQUE);
+        final RenderLayer layer = SegmentedBufferBuilderTest.layer("a", TransparencyType.OPAQUE);
         final SegmentedBufferBuilder first = source.getBuffer(layer, 1);
         first.addQuad(QUAD);
         final SegmentedBufferBuilder second = source.getBuffer(layer, 2);
@@ -29,8 +29,8 @@ class AngelicaBufferSourceTest {
     @Test
     void prepareGroupsSegmentsByLayerAndSortsOpaqueById() {
         final AngelicaBufferSource source = new AngelicaBufferSource();
-        final TestLayer opaque = new TestLayer("opaque", TransparencyType.OPAQUE);
-        final TestLayer translucent = new TestLayer("translucent", TransparencyType.GENERAL_TRANSPARENT);
+        final RenderLayer opaque = SegmentedBufferBuilderTest.layer("opaque", TransparencyType.OPAQUE);
+        final RenderLayer translucent = SegmentedBufferBuilderTest.layer("translucent", TransparencyType.GENERAL_TRANSPARENT);
 
         source.getBuffer(opaque, 7).addQuad(QUAD);
         source.getBuffer(translucent, 9).addQuad(QUAD);
@@ -60,7 +60,7 @@ class AngelicaBufferSourceTest {
         final AngelicaBufferSource source = new AngelicaBufferSource();
         final int layers = 40;
         for (int i = 0; i < layers; i++) {
-            source.getBuffer(new TestLayer("layer" + i, TransparencyType.OPAQUE), i).addQuad(QUAD);
+            source.getBuffer(SegmentedBufferBuilderTest.layer("layer" + i, TransparencyType.OPAQUE), i).addQuad(QUAD);
         }
         final List<RenderLayer> order = source.prepare();
         assertEquals(layers, order.size());
@@ -74,9 +74,9 @@ class AngelicaBufferSourceTest {
     @Test
     void endBatchWithTypeCompactsOrder() {
         final AngelicaBufferSource source = new AngelicaBufferSource();
-        final TestLayer opaqueA = new TestLayer("oa", TransparencyType.OPAQUE);
-        final TestLayer translucent = new TestLayer("t", TransparencyType.GENERAL_TRANSPARENT);
-        final TestLayer opaqueB = new TestLayer("ob", TransparencyType.OPAQUE);
+        final RenderLayer opaqueA = SegmentedBufferBuilderTest.layer("oa", TransparencyType.OPAQUE);
+        final RenderLayer translucent = SegmentedBufferBuilderTest.layer("t", TransparencyType.GENERAL_TRANSPARENT);
+        final RenderLayer opaqueB = SegmentedBufferBuilderTest.layer("ob", TransparencyType.OPAQUE);
         source.declareUse(opaqueA);
         source.declareUse(translucent);
         source.declareUse(opaqueB);
@@ -89,9 +89,17 @@ class AngelicaBufferSourceTest {
     }
 
     @Test
+    void packAbgrPacksRedGreenBlueAlpha() {
+        assertEquals(0xFF0000FF, AngelicaBufferSource.packEntityColor(new Vector4f(1f, 0f, 0f, 1f)));
+        final int packed = AngelicaBufferSource.packEntityColor(new Vector4f(0f, 0.5f, 0f, 0f));
+        assertEquals(0, packed & 0xFF0000FF, "red, blue and alpha bytes must be zero");
+        assertTrue((packed & 0x0000FF00) != 0, "green byte must be nonzero");
+    }
+
+    @Test
     void declaredLayersAppearInOrderWithoutSegments() {
         final AngelicaBufferSource source = new AngelicaBufferSource();
-        final TestLayer retainedOnly = new TestLayer("retained", TransparencyType.OPAQUE);
+        final RenderLayer retainedOnly = SegmentedBufferBuilderTest.layer("retained", TransparencyType.OPAQUE);
         source.declareUse(retainedOnly);
         final List<RenderLayer> order = source.prepare();
         assertEquals(1, order.size());

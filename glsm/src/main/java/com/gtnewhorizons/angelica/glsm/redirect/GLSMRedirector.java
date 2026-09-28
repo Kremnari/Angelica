@@ -164,6 +164,8 @@ public class GLSMRedirector {
     private static final String EXTGPUShader4 = "org/lwjgl/opengl/EXTGPUShader4";
     private static final String ARBTimerQuery = "org/lwjgl/opengl/ARBTimerQuery";
     private static final String EXTTimerQuery = "org/lwjgl/opengl/EXTTimerQuery";
+    private static final String ARBSamplerObjects = "org/lwjgl/opengl/ARBSamplerObjects";
+    private static final String ARBMultiBind = "org/lwjgl/opengl/ARBMultiBind";
 
     // Redirect VAO related calls from NHLib
     private static final String UniversalVAO = "com/gtnewhorizon/gtnhlib/client/opengl/UniversalVAO";
@@ -555,6 +557,7 @@ public class GLSMRedirector {
             .add("glMultiDrawElementsIndirect");
         final var gl44 = RedirectMap.newMap()
             .add("glBufferStorage")
+            .add("glBindSamplers")
             .add("glClearTexImage");
         final var gl45 = RedirectMap.newMap()
             .add("glCreateBuffers")
@@ -767,6 +770,17 @@ public class GLSMRedirector {
             .add("glMapBufferRange")
             .add("glFlushMappedBufferRange")
         );
+        methodRedirects.put(ARBSamplerObjects, RedirectMap.newMap()
+            .add("glGenSamplers")
+            .add("glDeleteSamplers")
+            .add("glIsSampler")
+            .add("glBindSampler")
+            .add("glSamplerParameteri")
+            .add("glSamplerParameterf")
+        );
+        methodRedirects.put(ARBMultiBind, RedirectMap.newMap()
+            .add("glBindSamplers")
+        );
 
         // APPLE
         methodRedirects.put(APPLEVertexArrayObject, RedirectMap.newMap()
@@ -796,6 +810,8 @@ public class GLSMRedirector {
             .add("gluBuild2DMipmaps")
             .add("gluErrorString")
         );
+        // Must honor disableErrorChecks like glGetError, or it throws on errors those checks left latched
+        methodRedirects.put("org/lwjgl/opengl/Util", RedirectMap.newMap().add("checkGLError"));
 
         // Quadric type replacements
         typeRedirects.put("org/lwjgl/util/glu/Sphere", "com/gtnewhorizons/angelica/glsm/compat/lwjgl/AngelicaSphere");

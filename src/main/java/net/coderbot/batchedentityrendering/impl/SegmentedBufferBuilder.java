@@ -1,6 +1,7 @@
 package net.coderbot.batchedentityrendering.impl;
 
 import com.gtnewhorizon.gtnhlib.client.renderer.cel.model.quad.ModelQuadView;
+import com.gtnewhorizon.gtnhlib.client.renderer.cel.util.ModelQuadUtil;
 import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormat;
 import com.gtnewhorizons.angelica.compat.mojang.RenderLayer;
 import com.gtnewhorizons.angelica.rendering.tesr.TemplateBuffer;
@@ -10,7 +11,6 @@ import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import net.coderbot.iris.uniforms.CapturedRenderingState;
 import org.joml.Matrix4fc;
 import org.joml.Vector3f;
-import org.joml.Vector4fc;
 import org.lwjgl.BufferUtils;
 
 import java.nio.ByteBuffer;
@@ -74,13 +74,26 @@ public class SegmentedBufferBuilder {
     private LayerBuffer current;
     private RenderLayer currentType;
     private int currentBlockEntityId;
+    private int currentItemId;
+    private int currentEntityId;
+    private int currentRenderedBlockEntityId;
     private int currentEntityColor;
     private int segmentStartVertex;
     private long allocatedBytes;
 
     public void begin(RenderLayer type, int blockEntityId) {
-        final int entityColor = packEntityColor(CapturedRenderingState.INSTANCE.getCurrentEntityColor());
-        if (type == currentType && blockEntityId == currentBlockEntityId && entityColor == currentEntityColor && current != null) {
+        begin(type, blockEntityId, false);
+    }
+
+    public void begin(RenderLayer type, int blockEntityId, boolean entityKind) {
+        final CapturedRenderingState state = CapturedRenderingState.INSTANCE;
+        final int entityId = entityKind ? blockEntityId : state.getCurrentRenderedEntity();
+        final int renderedBlockEntityId = entityKind ? state.getCurrentRenderedBlockEntity() : blockEntityId;
+        final int entityColor = AngelicaBufferSource.packEntityColor(CapturedRenderingState.INSTANCE.getCurrentEntityColor());
+        final int itemId = CapturedRenderingState.INSTANCE.getCurrentRenderedItem();
+        if (type == currentType && blockEntityId == currentBlockEntityId && entityId == currentEntityId
+            && renderedBlockEntityId == currentRenderedBlockEntityId && itemId == currentItemId
+            && entityColor == currentEntityColor && current != null) {
             return;
         }
         endSegment();
@@ -94,12 +107,11 @@ public class SegmentedBufferBuilder {
         current = buffer;
         currentType = type;
         currentBlockEntityId = blockEntityId;
+        currentItemId = itemId;
+        currentEntityId = entityId;
+        currentRenderedBlockEntityId = renderedBlockEntityId;
         currentEntityColor = entityColor;
         segmentStartVertex = current.vertexCount;
-    }
-
-    public static int packEntityColor(Vector4fc c) {
-        return ((int) (c.w() * 255f + 0.5f) << 24) | ((int) (c.x() * 255f + 0.5f) << 16) | ((int) (c.y() * 255f + 0.5f) << 8) | (int) (c.z() * 255f + 0.5f);
     }
 
     public void addQuad(ModelQuadView quad) {
@@ -125,6 +137,19 @@ public class SegmentedBufferBuilder {
         current.vertexCount += template.vertexCount;
     }
 
+    public void addPackedVertices(int[] packed, int vertexCount, Matrix4fc mv, Vector3f scratch) {
+        if (current == null) {
+            throw new IllegalStateException("addPackedVertices() without begin()");
+        }
+        final VertexFormat format = currentType.getVertexFormat();
+        ensureCurrentCapacity(format.getVertexSize() * vertexCount);
+        final ByteBuffer buffer = current.buffer;
+        final long ptr = memAddress0(buffer) + buffer.position();
+        final long end = format.writeToBuffer0(ptr, packed, vertexCount * ModelQuadUtil.VERTEX_SIZE, mv, scratch);
+        buffer.position(buffer.position() + (int) (end - ptr));
+        current.vertexCount += vertexCount;
+    }
+
     private void ensureCurrentCapacity(int bytes) {
         final int before = current.buffer.capacity();
         current.ensureCapacity(bytes);
@@ -133,7 +158,7 @@ public class SegmentedBufferBuilder {
 
     private void endSegment() {
         if (current != null && current.vertexCount > segmentStartVertex) {
-            segments.add(new BufferSegment(currentType, currentBlockEntityId, currentEntityColor, segmentStartVertex,
+            segments.add(new BufferSegment(currentType, currentBlockEntityId, currentEntityId, currentRenderedBlockEntityId, currentItemId, currentEntityColor, segmentStartVertex,
                 current.vertexCount - segmentStartVertex, current));
         }
         segmentStartVertex = current == null ? 0 : current.vertexCount;

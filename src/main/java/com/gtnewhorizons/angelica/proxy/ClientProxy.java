@@ -1,5 +1,6 @@
 package com.gtnewhorizons.angelica.proxy;
 
+import com.gtnewhorizons.angelica.debug.DebugKeyHandler;
 import com.gtnewhorizons.angelica.rendering.culling.GpuCulling;
 import static com.gtnewhorizons.angelica.AngelicaMod.MOD_ID;
 
@@ -47,8 +48,11 @@ import com.gtnewhorizons.angelica.rendering.TileEntityRenderBoundsRegistry;
 import com.gtnewhorizons.angelica.rendering.tesr.AngelicaTesrMeshCache;
 import com.gtnewhorizons.angelica.config.CompatConfig;
 import com.gtnewhorizons.angelica.config.ConfigMigrator;
+import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.debug.F3Direction;
+import com.gtnewhorizons.angelica.debug.flyby.FlybyFallGuard;
 import com.gtnewhorizons.angelica.debug.flyby.FlybyRunner;
+import com.gtnewhorizons.angelica.debug.profiling.TracyCaptureNotifier;
 import com.gtnewhorizons.angelica.debug.FrametimeGraph;
 import com.gtnewhorizons.angelica.debug.TPSGraph;
 import com.gtnewhorizons.angelica.dynamiclights.DynamicLights;
@@ -58,7 +62,6 @@ import com.gtnewhorizons.angelica.glsm.backend.VSyncMode;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.hudcaching.HUDCaching;
 import com.gtnewhorizons.angelica.iris.IrisGLSMBridge;
-import com.gtnewhorizons.angelica.loading.AngelicaClientTweaker;
 import com.gtnewhorizons.angelica.mixins.interfaces.IGameSettingsExt;
 import com.gtnewhorizons.angelica.render.CloudRenderer;
 import com.gtnewhorizons.angelica.render.EmissiveTextureAutoloader;
@@ -73,6 +76,7 @@ import com.gtnewhorizons.angelica.rendering.celeritas.threading.DefaultChunkTask
 import com.gtnewhorizons.angelica.rendering.celeritas.threading.ThreadedChunkTaskProvider;
 import com.gtnewhorizons.angelica.rendering.items.BlockRenderListManager;
 import com.gtnewhorizons.angelica.rendering.items.ItemRenderListManager;
+import com.gtnewhorizons.angelica.rendering.tesr.TesrLifecycle;
 import com.gtnewhorizons.angelica.utils.AnimationMode;
 import com.gtnewhorizons.angelica.utils.ManagedEnum;
 import com.gtnewhorizons.angelica.zoom.Zoom;
@@ -97,12 +101,6 @@ import net.coderbot.iris.Iris;
 import net.coderbot.iris.client.IrisDebugScreenHandler;
 
 public final class ClientProxy extends CommonProxy {
-
-    /**
-     * So you don't need to be in a dev env to have access to the commands.
-     * Do not commit with this set to true.
-     */
-    private static final boolean FORCE_DEBUG_MODE = false;
 
     public static BlockError blockError;
     public static final ManagedEnum<AnimationMode> animationsMode = new ManagedEnum<>(AnimationMode.VISIBLE_ONLY);
@@ -189,6 +187,7 @@ public final class ClientProxy extends CommonProxy {
             Zoom.init();
         }
         FpsReducer.init();
+        FMLCommonHandler.instance().bus().register(new DebugKeyHandler());
         AngelicaConfig.applyGpuCullingMode();
         if (AngelicaConfig.enableDynamicLights) {
             EntityLightConfig.init(new java.io.File(mc.mcDataDir, "config"));
@@ -199,11 +198,16 @@ public final class ClientProxy extends CommonProxy {
         }
 
         // Debug tooling
-        if (FORCE_DEBUG_MODE || !AngelicaClientTweaker.isObfEnv()) {
+        if (SystemProperties.debugTooling() || Tracy.ENABLED) {
             ClientCommandHandler.instance.registerCommand(new AngelicaCommand());
-
+        }
+        if (SystemProperties.debugTooling()) {
             FMLCommonHandler.instance().bus().register(FlybyRunner.INSTANCE);
+            MinecraftForge.EVENT_BUS.register(FlybyFallGuard.INSTANCE);
             FlybyRunner.INSTANCE.startFromProperties();
+        }
+        if (Tracy.ENABLED) {
+            TracyCaptureNotifier.INSTANCE.register();
         }
     }
 
@@ -246,8 +250,7 @@ public final class ClientProxy extends CommonProxy {
 
         // Register all blocks. Because blockids are unique to a world, this must be done each load
         GameData.getBlockRegistry().typeSafeIterable().forEach(o -> {
-            AngelicaBlockSafetyRegistry.canBlockRenderOffThread(o, true, true);
-            AngelicaBlockSafetyRegistry.canBlockRenderOffThread(o, false, true);
+            AngelicaBlockSafetyRegistry.canBlockRenderOffThread(o);
         });
     }
 
@@ -257,6 +260,7 @@ public final class ClientProxy extends CommonProxy {
         Tracy.sectionLeave(this.worldSection);
         this.worldSection = 0L;
         DynamicLights.get().removeAllLightSources();
+        TesrLifecycle.reset();
         GpuCulling.onWorldUnload();
     }
 

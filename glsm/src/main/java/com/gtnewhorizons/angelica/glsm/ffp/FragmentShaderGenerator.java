@@ -1,6 +1,7 @@
 package com.gtnewhorizons.angelica.glsm.ffp;
 
 import org.lwjgl.opengl.GL11;
+import org.embeddedt.embeddium.impl.render.shader.ShaderLoader;
 
 /**
  * Generates GLSL 330 core fragment shaders for FFP emulation.
@@ -17,6 +18,15 @@ public final class FragmentShaderGenerator {
 
         emitInputs(sb, key);
         emitUniforms(sb, key);
+        if (key.combinedGlint()) {
+            sb.append("#define GLINT_REPLACE_ALPHA ").append(key.glintReplaceAlpha() ? 1 : 0).append('\n');
+            sb.append("#define GLINT_FOG_MODE ").append(key.fogMode()).append('\n');
+            sb.append("#define GLINT_ALPHA_FUNC ").append(key.alphaTestEnabled() ? key.alphaTestFunc() : 7).append('\n');
+            sb.append("#define GLINT_OVERLAY ").append(key.overlayInstanced() ? 2 : key.overlayEnabled() ? 1 : 0).append('\n');
+            sb.append("#define GLINT_LIGHTMAP ").append(key.nrEnabledUnits() > 1 && key.unitEnabled(1) ? 1 : 0).append('\n');
+            sb.append(ShaderLoader.getShaderSource("angelica:combined_glint.frag.glsl"));
+            return sb.toString();
+        }
         sb.append("out vec4 fragColor;\n\n");
 
         sb.append("void main() {\n");
@@ -35,6 +45,9 @@ public final class FragmentShaderGenerator {
     private static void emitInputs(StringBuilder sb, FragmentKey key) {
         sb.append("// Inputs from vertex shader\n");
         sb.append("in vec4 v_Color;\n");
+        if (key.overlayInstanced()) {
+            sb.append("in vec4 v_Overlay;\n");
+        }
         if (key.separateSpecular()) {
             sb.append("in vec3 v_SpecularColor;\n");
         }
@@ -116,8 +129,11 @@ public final class FragmentShaderGenerator {
      * Emit the modern-style damage overlay mix.
      */
     private static void emitOverlay(StringBuilder sb, FragmentKey key) {
-        if (!key.overlayEnabled()) return;
-        sb.append("  color.rgb = mix(color.rgb, u_OverlayColor.rgb, u_OverlayColor.a);\n");
+        if (key.overlayInstanced()) {
+            sb.append("  color.rgb = mix(color.rgb, v_Overlay.rgb, v_Overlay.a);\n");
+        } else if (key.overlayEnabled()) {
+            sb.append("  color.rgb = mix(color.rgb, u_OverlayColor.rgb, u_OverlayColor.a);\n");
+        }
     }
 
     private static void emitSimpleUnit(StringBuilder sb, FragmentKey key, int unit, String texVar, String envColorVar, String prevVar, String assign) {

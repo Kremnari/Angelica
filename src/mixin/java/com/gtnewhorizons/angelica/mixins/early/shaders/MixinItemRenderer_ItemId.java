@@ -1,5 +1,7 @@
 package com.gtnewhorizons.angelica.mixins.early.shaders;
 
+import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.StateSet;
 import com.gtnewhorizons.angelica.mixins.interfaces.ItemRendererAccessor;
 import com.gtnewhorizons.angelica.shadercompat.ShaderGlint;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
@@ -36,19 +38,23 @@ public class MixinItemRenderer_ItemId implements ItemRendererAccessor {
         remap = false
     )
     private void iris$entityItemId(EntityLivingBase entity, ItemStack itemStack, int renderPass, IItemRenderer.ItemRenderType type, Operation<Void> original) {
-        final int prevItemId = ItemIdManager.getItemId();
-        final long prevCutout = GbufferPrograms.pushCutoutDefaults();
-
-        final Boolean prevTranslucency = GbufferPrograms.beginTranslucencyDeclaration(
-            HandRenderer.INSTANCE.isItemTranslucent(itemStack));
-
-        ItemIdManager.setItemId(itemStack);
+        ItemIdManager.pushItemId();
+        final int stateDepth = GLStateManager.pushState(StateSet.CUTOUT);
+        Boolean prevTranslucency = null;
+        boolean translucencyDeclared = false;
         try {
+            GbufferPrograms.setCutoutDefaults();
+
+            prevTranslucency = GbufferPrograms.beginTranslucencyDeclaration(
+                HandRenderer.INSTANCE.isItemTranslucent(itemStack));
+            translucencyDeclared = true;
+
+            ItemIdManager.setItemId(itemStack);
             original.call(entity, itemStack, renderPass, type);
         } finally {
-            GbufferPrograms.endTranslucencyDeclaration(prevTranslucency);
-            ItemIdManager.setItemIdRaw(prevItemId);
-            GbufferPrograms.popCutoutDefaults(prevCutout);
+            if (translucencyDeclared) GbufferPrograms.endTranslucencyDeclaration(prevTranslucency);
+            ItemIdManager.popItemId();
+            GLStateManager.popStateTo(stateDepth);
         }
     }
 
@@ -58,6 +64,7 @@ public class MixinItemRenderer_ItemId implements ItemRendererAccessor {
         remap = false
     )
     private void iris$glintStart(CallbackInfo ci) {
+        ItemIdManager.pushItemId();
         ItemIdManager.resetItemId();
         GbufferPrograms.setupSpecialRenderCondition(SpecialCondition.GLINT);
         ShaderGlint.beginGlint();
@@ -71,5 +78,6 @@ public class MixinItemRenderer_ItemId implements ItemRendererAccessor {
     private void iris$glintEnd(CallbackInfo ci) {
         GbufferPrograms.teardownSpecialRenderCondition();
         ShaderGlint.endGlint();
+        ItemIdManager.popItemId();
     }
 }

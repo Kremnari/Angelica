@@ -1,6 +1,7 @@
 package com.gtnewhorizons.angelica.iris;
 
 import com.gtnewhorizons.angelica.client.rendering.TextureTracker;
+import com.gtnewhorizons.angelica.glsm.GLContextState;
 import com.gtnewhorizons.angelica.glsm.hooks.DeferredAlphaHandler;
 import com.gtnewhorizons.angelica.glsm.hooks.DeferredBlendHandler;
 import com.gtnewhorizons.angelica.glsm.hooks.DeferredDepthColorHandler;
@@ -10,8 +11,6 @@ import com.gtnewhorizons.angelica.glsm.hooks.ShaderTransformPostProcessor;
 import com.gtnewhorizons.angelica.glsm.shader.ShaderType;
 import org.taumc.glsl.grammar.GLSLParser;
 import com.gtnewhorizons.angelica.glsm.hooks.ShaderWorkSubmitter;
-import com.gtnewhorizons.angelica.glsm.hooks.VanillaBooleanLayer;
-import com.gtnewhorizons.angelica.glsm.hooks.VanillaStateLayer;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.sdlgpu.SDLGPUGate;
 import net.coderbot.iris.Iris;
@@ -22,6 +21,7 @@ import net.coderbot.iris.gl.blending.AlphaTestStorage;
 import net.coderbot.iris.gl.blending.BlendModeStorage;
 import net.coderbot.iris.gl.blending.DepthColorStorage;
 import net.coderbot.iris.gl.program.ProgramUniforms;
+import net.coderbot.iris.gl.program.Program;
 import net.coderbot.iris.gl.state.StateUpdateNotifiers;
 import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline;
 import net.coderbot.iris.pipeline.WorldRenderingPipeline;
@@ -41,10 +41,6 @@ public class IrisGLSMBridge {
     private static Runnable fogEndListener = null;
     private static Runnable fogDensityListener = null;
     private static Runnable colorModulatorListener = null;
-
-    private static boolean inputsDeferred = false;
-
-    private static boolean blendDeferred = false;
 
     private static boolean programRestoreDeferred = false;
 
@@ -93,42 +89,16 @@ public class IrisGLSMBridge {
         };
     }
 
-    private static VanillaBooleanLayer gated(VanillaBooleanLayer layer) {
-        return new VanillaBooleanLayer() {
-            @Override
-            public boolean isOverrideHeld() {
-                return Iris.enabled && layer.isOverrideHeld();
-            }
-
-            @Override
-            public boolean getVanilla() {
-                return layer.getVanilla();
-            }
-
-            @Override
-            public void setVanilla(boolean enabled) {
-                layer.setVanilla(enabled);
-            }
-        };
-    }
-
-    private static <T> VanillaStateLayer<T> gated(VanillaStateLayer<T> layer) {
-        return new VanillaStateLayer<>() {
-            @Override
-            public boolean isOverrideHeld() {
-                return Iris.enabled && layer.isOverrideHeld();
-            }
-
-            @Override
-            public void readVanilla(T into) {
-                layer.readVanilla(into);
-            }
-
-            @Override
-            public void writeVanilla(T from) {
-                layer.writeVanilla(from);
-            }
-        };
+    static void installVanillaStateLayers() {
+        // Forge initializes mods with the splash screen's shared drawable current.
+        // Iris overrides belong to the display context used for world rendering.
+        final GLContextState context = GLStateManager.primaryContext();
+        context.blendMode.setVanillaLayer(BlendModeStorage.ENABLE_LAYER);
+        context.blendState.setVanillaLayer(BlendModeStorage.FUNC_LAYER);
+        context.alphaTest.setVanillaLayer(AlphaTestStorage.ENABLE_LAYER);
+        context.alphaState.setVanillaLayer(AlphaTestStorage.FUNC_LAYER);
+        context.depthState.setVanillaLayer(DepthColorStorage.DEPTH_LAYER);
+        context.colorMask.setVanillaLayer(DepthColorStorage.COLOR_LAYER);
     }
 
     public static void register() {
@@ -168,12 +138,7 @@ public class IrisGLSMBridge {
             }
         };
 
-        GLStateManager.getBlendMode().setVanillaLayer(gated(BlendModeStorage.ENABLE_LAYER));
-        GLStateManager.getBlendState().setVanillaLayer(gated(BlendModeStorage.FUNC_LAYER));
-        GLStateManager.getAlphaTest().setVanillaLayer(gated(AlphaTestStorage.ENABLE_LAYER));
-        GLStateManager.getAlphaState().setVanillaLayer(gated(AlphaTestStorage.FUNC_LAYER));
-        GLStateManager.getDepthState().setVanillaLayer(gated(DepthColorStorage.DEPTH_LAYER));
-        GLStateManager.getColorMask().setVanillaLayer(gated(DepthColorStorage.COLOR_LAYER));
+        installVanillaStateLayers();
 
         GLSMHooks.alphaHandler = new DeferredAlphaHandler() {
             @Override
@@ -182,13 +147,13 @@ public class IrisGLSMBridge {
             }
 
             @Override
-            public void deferAlphaTestToggle(boolean enabled) {
-                AlphaTestStorage.deferAlphaTestToggle(enabled);
+            public boolean deferAlphaTestToggle(boolean enabled) {
+                return AlphaTestStorage.deferAlphaTestToggle(enabled);
             }
 
             @Override
-            public void deferAlphaFunc(int function, float reference) {
-                AlphaTestStorage.deferAlphaFunc(function, reference);
+            public boolean deferAlphaFunc(int function, float reference) {
+                return AlphaTestStorage.deferAlphaFunc(function, reference);
             }
         };
 
@@ -269,32 +234,19 @@ public class IrisGLSMBridge {
             }
             if (!updatePipeline) return;
 
-            if (GLStateManager.isForeignDraw()) {
-                inputsDeferred = true;
-                return;
+            final WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
+            if (pipeline != null) {
+                pipeline.setInputs(StateTracker.INSTANCE.getInputs());
             }
-            Iris.getPipelineManager().getPipeline().ifPresent(p -> p.setInputs(StateTracker.INSTANCE.getInputs()));
         });
 
         GLSMHooks.VANILLA_BLEND_CHANGE.addListener(event -> {
             if (!Iris.enabled) return;
-            if (GLStateManager.isForeignDraw()) {
-                blendDeferred = true;
-                return;
-            }
             refreshBlendCondition();
         });
 
         GLSMHooks.FOREIGN_DRAW_END.addListener(event -> {
             if (!Iris.enabled) return;
-            if (inputsDeferred) {
-                inputsDeferred = false;
-                Iris.getPipelineManager().getPipeline().ifPresent(p -> p.setInputs(StateTracker.INSTANCE.getInputs()));
-            }
-            if (blendDeferred) {
-                blendDeferred = false;
-                refreshBlendCondition();
-            }
             if (programRestoreDeferred) {
                 programRestoreDeferred = false;
                 final WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
@@ -327,7 +279,7 @@ public class IrisGLSMBridge {
             if (!drp.shouldOverrideShaders()) return;
             DepthColorStorage.unlockDepthColor();
 
-            if (event.newProgram != 0 && !DepthColorStorage.isOwnedProgram(event.newProgram)) {
+            if (event.newProgram != 0 && !Program.isManagedBind(event.newProgram) && !DepthColorStorage.isOwnedProgram(event.newProgram)) {
                 drp.onModProgramOverride();
             }
         });
@@ -351,12 +303,15 @@ public class IrisGLSMBridge {
         GLSMHooks.PROGRAM_CHANGE.addListener(event -> {
             if (!Iris.enabled) return;
             if (!event.postBind) return;
+            if (Program.isManagedBind(event.newProgram)) return;
             WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
             if (pipeline instanceof DeferredWorldRenderingPipeline drp) {
                 DeferredWorldRenderingPipeline.Pass activePass = drp.getActivePassProgram();
                 if (activePass != null && activePass.getProgram() != null && activePass.getProgram().getProgramId() == event.newProgram) {
                     final int frame = SystemTimeUniforms.COUNTER.getAsInt();
-                    if (programLastUpdatedFrame.get(event.newProgram) != frame) {
+                    if (programLastUpdatedFrame.get(event.newProgram) != frame
+                        || !ProgramUniforms.isActiveProgramBound()
+                        || ProgramUniforms.activeHasDeferredUploads()) {
                         activePass.getProgram().getUniforms().update();
                         programLastUpdatedFrame.put(event.newProgram, frame);
                     }

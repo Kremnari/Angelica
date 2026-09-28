@@ -49,6 +49,7 @@ public class RenderSystem {
     private static boolean supportsTesselation;
     private static boolean supportsSamplerObjects;
     private static int maxImageUnits;
+    @Getter private static int maxCombinedTextureImageUnits;
     private static int maxSSBOBindings;
     private static int maxGlslVersion;
     private static boolean supportsGpuShader4;
@@ -63,9 +64,6 @@ public class RenderSystem {
 
     private static volatile boolean isLTW;
     private static volatile boolean ltwDetected;
-
-    // Sampler object state tracking (null if unsupported)
-    private static int[] samplers;
 
     private static final Pattern SEMVER_PATTERN = Pattern.compile("(?<major>\\d+)\\.(?<minor>\\d+)\\.*(?<bugfix>\\d*)(.*)");
 
@@ -158,7 +156,7 @@ public class RenderSystem {
         // Check for sampler objects support (GL 3.3+ or ARB extension)
         supportsSamplerObjects = GLStateManager.capabilities.OpenGL33 || GLStateManager.capabilities.GL_ARB_sampler_objects;
         if (supportsSamplerObjects) {
-            samplers = new int[RENDER_BACKEND.getInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)];
+            maxCombinedTextureImageUnits = RENDER_BACKEND.getInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
         }
 
         maxGlslVersion = Integer.parseInt(parseGlVersionString(RENDER_BACKEND.getString(GL20.GL_SHADING_LANGUAGE_VERSION)));
@@ -171,13 +169,13 @@ public class RenderSystem {
 
         if (isGLES) {
             GLStateManager.LOGGER.info("GL ES context detected, enabling shader transformer.");
-            ShaderManager.getInstance().enable();
+            ShaderManager.enable();
         } else if (GLStateManager.capabilities.OpenGL32) {
             final int profileMask = RENDER_BACKEND.getInteger(GL32.GL_CONTEXT_PROFILE_MASK);
             if ((profileMask & GL32.GL_CONTEXT_CORE_PROFILE_BIT) != 0) {
                 coreProfile = true;
                 GLStateManager.LOGGER.info("GL 3.3 core profile detected, enabling FFP shader emulation.");
-                ShaderManager.getInstance().enable();
+                ShaderManager.enable();
             } else {
                 throw new IllegalStateException("Non-core GL context (profile mask 0x" + Integer.toHexString(profileMask)
                     + "); FFP emulation requires a core profile and nothing would render. Context creation should have rejected this.");
@@ -486,34 +484,33 @@ public class RenderSystem {
     }
 
     public static void disableBufferBlend(int buffer) {
-        RENDER_BACKEND.disablei(GL11.GL_BLEND, buffer);
-        GLStateManager.getBlendMode().setUnknownState();
+        GLStateManager.glDisablei(GL11.GL_BLEND, buffer);
     }
 
     public static void enableBufferBlend(int buffer) {
-        RENDER_BACKEND.enablei(GL11.GL_BLEND, buffer);
-        GLStateManager.getBlendMode().setUnknownState();
+        GLStateManager.glEnablei(GL11.GL_BLEND, buffer);
     }
 
     public static void blendFuncSeparatei(int buffer, int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {
-        RENDER_BACKEND.blendFuncSeparatei(buffer, srcRGB, dstRGB, srcAlpha, dstAlpha);
+        GLStateManager.glBlendFuncSeparatei(buffer, srcRGB, dstRGB, srcAlpha, dstAlpha);
     }
 
     public static void bindTextureToUnit(int unit, int texture) {
+        if (unit != 0 && GLStateManager.getBoundTextureForServerState(unit) != texture) GLStateManager.beforeUncapturedStateChange();
         dsaState.bindTextureToUnit(unit, texture);
     }
 
     public static void bindTextureToUnit(int target, int unit, int texture) {
+        if (unit != 0 && GLStateManager.getBoundTextureForServerState(unit) != texture) GLStateManager.beforeUncapturedStateChange();
         dsaState.bindTextureToUnit(target, unit, texture);
     }
 
-    public static final FloatBuffer PROJECTION_MATRIX_BUFFER = BufferUtils.createFloatBuffer(16);
-
     public static void setupProjectionMatrix(Matrix4f matrix) {
+        final FloatBuffer projectionMatrixBuffer = GLStateManager.ctx().projectionMatrixBuffer;
         GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
         GLStateManager.glPushMatrix();
-        matrix.get(0, PROJECTION_MATRIX_BUFFER);
-        GLStateManager.glLoadMatrix(PROJECTION_MATRIX_BUFFER);
+        matrix.get(0, projectionMatrixBuffer);
+        GLStateManager.glLoadMatrix(projectionMatrixBuffer);
         GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
     }
 
@@ -628,7 +625,7 @@ public class RenderSystem {
 
     public static int genSampler() {
         if (!supportsSamplerObjects) return 0;
-        return RENDER_BACKEND.genSamplers();
+        return GLStateManager.glGenSamplers();
     }
 
     public static void destroySampler(int sampler) {
@@ -638,22 +635,25 @@ public class RenderSystem {
 
     public static void samplerParameteri(int sampler, int pname, int param) {
         if (!supportsSamplerObjects || sampler == 0) return;
-        RENDER_BACKEND.samplerParameteri(sampler, pname, param);
+        GLStateManager.glSamplerParameteri(sampler, pname, param);
+    }
+
+    public static void samplerParameterf(int sampler, int pname, float param) {
+        if (!supportsSamplerObjects || sampler == 0) return;
+        GLStateManager.glSamplerParameterf(sampler, pname, param);
     }
 
     public static void bindSamplerToUnit(int unit, int sampler) {
         if (!supportsSamplerObjects) return;
-        if (samplers[unit] == sampler) return;
-        RENDER_BACKEND.bindSampler(unit, sampler);
-        samplers[unit] = sampler;
+        GLStateManager.glBindSampler(unit, sampler);
     }
 
     public static void unbindAllSamplers() {
         if (!supportsSamplerObjects) return;
-        for (int i = 0; i < samplers.length; i++) {
-            if (samplers[i] != 0) {
-                RENDER_BACKEND.bindSampler(i, 0);
-                samplers[i] = 0;
+        final int count = GLStateManager.getSamplerUnitCount();
+        for (int i = 0; i < count; i++) {
+            if (GLStateManager.getSamplerBinding(i) != 0) {
+                GLStateManager.glBindSampler(i, 0);
             }
         }
     }

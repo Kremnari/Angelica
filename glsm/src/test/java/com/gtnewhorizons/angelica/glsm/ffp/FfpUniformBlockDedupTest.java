@@ -2,7 +2,6 @@ package com.gtnewhorizons.angelica.glsm.ffp;
 
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
-import com.gtnewhorizons.angelica.glsm.hooks.GLSMConfig;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
@@ -50,8 +49,8 @@ class FfpUniformBlockDedupTest {
         GLStateManager.glAlphaFunc(GL11.GL_ALWAYS, 0.0f);
         GLStateManager.glNormal3f(0.0f, 0.0f, 1.0f);
         GLStateManager.glTexCoord2f(0.0f, 0.0f);
-        GLSMConfig.lastBrightnessX = 0.0f;
-        GLSMConfig.lastBrightnessY = 0.0f;
+        GLStateManager.ctx().lastBrightnessX = 0.0f;
+        GLStateManager.ctx().lastBrightnessY = 0.0f;
         GLStateManager.glFog(GL11.GL_FOG_COLOR, floats(0.0f, 0.0f, 0.0f, 1.0f));
         GLStateManager.glFogf(GL11.GL_FOG_DENSITY, 1.0f);
         GLStateManager.glTexEnv(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_COLOR, floats(0.0f, 0.0f, 0.0f, 0.0f));
@@ -68,18 +67,18 @@ class FfpUniformBlockDedupTest {
         resetState();
         final Uniforms uniforms = new Uniforms();
         try {
-            uniforms.upload();
+            uniforms.upload(GLStateManager.ctx());
             assertEquals(1, uniforms.blockWrites, "first upload always writes");
             final int firstOffset = boundRangeStart();
 
             GLStateManager.glLoadIdentity();
-            uniforms.upload();
+            uniforms.upload(GLStateManager.ctx());
             assertEquals(1, uniforms.blockWrites, "a dirty generation with unchanged bytes must not write");
             assertEquals(1, uniforms.blockSkips, "and must be counted as a skip");
             assertEquals(firstOffset, boundRangeStart(), "the skipped write must not advance the ring or rebind");
 
             GLStateManager.glTranslatef(1.0f, 0.0f, 0.0f);
-            uniforms.upload();
+            uniforms.upload(GLStateManager.ctx());
             assertEquals(2, uniforms.blockWrites, "a changed matrix must write");
             assertEquals(1, uniforms.blockSkips, "a write is not a skip");
             assertNotEquals(firstOffset, boundRangeStart(), "a write takes a fresh ring range and rebinds");
@@ -95,11 +94,11 @@ class FfpUniformBlockDedupTest {
         final Uniforms first = new Uniforms();
         final Uniforms second = new Uniforms();
         try {
-            first.upload();
-            first.upload();
+            first.upload(GLStateManager.ctx());
+            first.upload(GLStateManager.ctx());
             assertEquals(1, first.blockWrites);
 
-            second.upload();
+            second.upload(GLStateManager.ctx());
             assertEquals(1, second.blockWrites, "a never-bound instance must write regardless of content");
         } finally {
             first.destroy();
@@ -128,7 +127,7 @@ class FfpUniformBlockDedupTest {
         addCategory(tests, "currentColor", () -> GLStateManager.glColor4f(0.25f, 0.5f, 0.75f, 1.0f));
         addCategory(tests, "currentNormal", () -> GLStateManager.glNormal3f(0.0f, 1.0f, 0.0f));
         addCategory(tests, "currentTexCoord", () -> GLStateManager.glTexCoord2f(0.125f, 0.375f));
-        addCategory(tests, "lightmapCoord", () -> GLSMConfig.lastBrightnessX = 96.0f);
+        addCategory(tests, "lightmapCoord", () -> GLStateManager.ctx().lastBrightnessX = 96.0f);
         addCategory(tests, "texGenPlane", () -> GLStateManager.glTexGen(GL11.GL_S, GL11.GL_OBJECT_PLANE, floats(0.5f, 0.0f, 0.0f, 0.25f)));
         addCategory(tests, "clipPlane", () -> GLStateManager.glClipPlane(GL11.GL_CLIP_PLANE0, doubles(0.0, 1.0, 0.0, 7.0)));
         addCategory(tests, "alphaRef", () -> GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.35f));
@@ -146,19 +145,19 @@ class FfpUniformBlockDedupTest {
             resetState();
             final Uniforms uniforms = new Uniforms();
             try {
-                uniforms.upload();
-                uniforms.upload();
+                uniforms.upload(GLStateManager.ctx());
+                uniforms.upload(GLStateManager.ctx());
                 final int writesBefore = uniforms.blockWrites;
                 final int settledOffset = boundRangeStart();
 
                 mutate.run();
-                uniforms.upload();
+                uniforms.upload(GLStateManager.ctx());
                 assertEquals(writesBefore + 1, uniforms.blockWrites, name + ": a changed member must write");
                 assertNotEquals(settledOffset, boundRangeStart(), name + ": a write must rebind to a fresh range");
 
                 final int skipsBefore = uniforms.blockSkips;
                 final int writtenOffset = boundRangeStart();
-                uniforms.upload();
+                uniforms.upload(GLStateManager.ctx());
                 assertEquals(writesBefore + 1, uniforms.blockWrites, name + ": re-uploading unchanged bytes must not write");
                 assertEquals(writtenOffset, boundRangeStart(), name + ": and must not rebind");
                 if (uniforms.blockSkips != skipsBefore) {

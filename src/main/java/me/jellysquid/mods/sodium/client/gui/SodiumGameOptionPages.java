@@ -2,9 +2,9 @@ package me.jellysquid.mods.sodium.client.gui;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.function.BiConsumer;
-import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 
 import net.minecraft.client.Minecraft;
@@ -35,11 +35,13 @@ import me.jellysquid.mods.sodium.client.gui.options.control.ControlValueFormatte
 import me.jellysquid.mods.sodium.client.gui.options.control.CyclingControl;
 import me.jellysquid.mods.sodium.client.gui.options.control.SliderControl;
 import me.jellysquid.mods.sodium.client.gui.options.control.TickBoxControl;
+import me.jellysquid.mods.sodium.client.gui.options.named.BiomeBlendMode;
 import me.jellysquid.mods.sodium.client.gui.options.named.GraphicsMode;
 import me.jellysquid.mods.sodium.client.gui.options.named.GraphicsQuality;
 import me.jellysquid.mods.sodium.client.gui.options.named.LightingQuality;
 import me.jellysquid.mods.sodium.client.gui.options.named.MultiDrawMode;
 import me.jellysquid.mods.sodium.client.gui.options.named.ParticleMode;
+import me.jellysquid.mods.sodium.client.gui.options.named.TexelSampling;
 import me.jellysquid.mods.sodium.client.gui.options.named.TextureFilterMode;
 import me.jellysquid.mods.sodium.client.gui.options.storage.AngelicaOptionsStorage;
 import me.jellysquid.mods.sodium.client.gui.options.storage.CubicChunksOptionStorage;
@@ -194,7 +196,38 @@ public class SodiumGameOptionPages {
                 .setFlags(OptionFlag.REQUIRES_ASSET_RELOAD, OptionFlag.REQUIRES_RENDERER_RELOAD)
                 .build();
 
-        textureFilterMode.iris$dynamicallyEnable(() -> mipmapLevels.getValue() > 0);
+        final OptionImpl<SodiumGameOptions, TexelSampling> texelSampling =
+            OptionImpl.createBuilder(TexelSampling.class, sodiumOpts)
+                .setName(I18n.format("sodium.options.texel_sampling.name"))
+                .setTooltip(I18n.format("sodium.options.texel_sampling.tooltip"))
+                .setControl(option -> new CyclingControl<>(option, TexelSampling.class))
+                .setBinding((opts, value) -> opts.quality.texelSampling = value,
+                    opts -> opts.quality.texelSampling)
+                .setImpact(OptionImpact.LOW)
+                // Only this mode needs a rerender
+                .setFlags(() -> textureFilterMode.getValue() == TextureFilterMode.NONE
+                    ? EnumSet.of(OptionFlag.REQUIRES_RENDERER_RELOAD)
+                    : EnumSet.noneOf(OptionFlag.class))
+                .build();
+
+        final OptionImpl<SodiumGameOptions, Integer> biomeBlendRadius = OptionImpl.createBuilder(int.class, sodiumOpts)
+            .setName(I18n.format("options.biomeBlendRadius"))
+            .setTooltip(I18n.format("sodium.options.biome_blend.tooltip"))
+            .setControl(option -> new SliderControl(option, 0, 7, 1, ControlValueFormatter.quantityOrDisabled("sodium.options.biome_blend.value", "sodium.options.none")))
+            .setBinding((opts, value) -> opts.quality.biomeBlendRadius = value, opts -> opts.quality.biomeBlendRadius)
+            .setImpact(OptionImpact.LOW)
+            .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
+            .build();
+
+        final OptionImpl<SodiumGameOptions, BiomeBlendMode> biomeBlendMode = OptionImpl.createBuilder(BiomeBlendMode.class, sodiumOpts)
+            .setName(I18n.format("sodium.options.biome_blend_mode.name"))
+            .setTooltip(I18n.format("sodium.options.biome_blend_mode.tooltip"))
+            .setControl(option -> new CyclingControl<>(option, BiomeBlendMode.class))
+            .setBinding((opts, value) -> opts.quality.biomeBlendMode = value, opts -> opts.quality.biomeBlendMode)
+            .setImpact(OptionImpact.LOW)
+            .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
+            .build();
+        biomeBlendMode.iris$dynamicallyEnable(() -> biomeBlendRadius.getValue() > 0);
 
         groups.add(OptionGroup.createBuilder()
                 .add(OptionImpl.createBuilder(GraphicsMode.class, vanillaOpts)
@@ -250,18 +283,13 @@ public class SodiumGameOptionPages {
                     .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
                     .build())
                 .add(textureFilterMode)
-                .add(anisotropicFilteringSlider(vanillaOpts, textureFilterMode::getValue, mipmapLevels::getValue),
+                .add(texelSampling)
+                .add(anisotropicFilteringSlider(vanillaOpts, textureFilterMode::getValue),
                     SodiumGameOptions.anisotropySupported())
+                .add(biomeBlendRadius)
+                .add(biomeBlendMode)
                 // TODO
                 /*.add(OptionImpl.createBuilder(int.class, vanillaOpts)
-                        .setName(new TranslatableText("options.biomeBlendRadius"))
-                        .setTooltip(new TranslatableText("sodium.options.biome_blend.tooltip"))
-                        .setControl(option -> new SliderControl(option, 0, 7, 1, ControlValueFormatter.quantityOrDisabled("sodium.options.biome_blend.value", "gui.none")))
-                        .setBinding((opts, value) -> opts.biomeBlendRadius = value, opts -> opts.biomeBlendRadius)
-                        .setImpact(OptionImpact.LOW)
-                        .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
-                        .build())
-                .add(OptionImpl.createBuilder(int.class, vanillaOpts)
                         .setName(new TranslatableText("options.entityDistanceScaling"))
                         .setTooltip(new TranslatableText("sodium.options.entity_distance.tooltip"))
                         .setControl(option -> new SliderControl(option, 50, 500, 25, ControlValueFormatter.percentage()))
@@ -420,7 +448,7 @@ public class SodiumGameOptionPages {
                         .setName(I18n.format("sodium.options.async_occlusion_mode.name"))
                         .setTooltip(I18n.format("sodium.options.async_occlusion_mode.tooltip"))
                         .setControl(o -> new CyclingControl<>(o, AsyncOcclusionMode.class, new String[]{
-                            I18n.format("sodium.options.async_occlusion_mode.none"),
+                            I18n.format("sodium.options.none"),
                             I18n.format("sodium.options.async_occlusion_mode.only_shadow"),
                             I18n.format("sodium.options.async_occlusion_mode.everything") }))
                         .setImpact(OptionImpact.MEDIUM)
@@ -681,7 +709,7 @@ public class SodiumGameOptionPages {
     }
 
     public static OptionImpl<GameSettings, Integer> anisotropicFilteringSlider(MinecraftOptionsStorage storage,
-        Supplier<TextureFilterMode> mode, IntSupplier mipmapLevels) {
+        Supplier<TextureFilterMode> mode) {
         final int min = SodiumGameOptions.minAnisotropyLevel();
         final int max = Math.max(SodiumGameOptions.maxAnisotropyLevel(), min + 1);
         final OptionImpl<GameSettings, Integer> option = OptionImpl.createBuilder(int.class, storage)
@@ -695,8 +723,7 @@ public class SodiumGameOptionPages {
             .setFlags(OptionFlag.REQUIRES_ASSET_RELOAD)
             .build();
 
-        option.iris$dynamicallyEnable(() -> mipmapLevels.getAsInt() > 0 && mode.get().usesAnisotropy()
-            && SodiumGameOptions.hasAnisotropyRange());
+        option.iris$dynamicallyEnable(() -> mode.get().usesAnisotropy() && SodiumGameOptions.hasAnisotropyRange());
 
         return option;
     }
@@ -752,6 +779,12 @@ public class SodiumGameOptionPages {
                         .setTooltip(I18n.format("options.angelica.disablef3.tooltip"))
                         .setControl(TickBoxControl::new)
                         .setBinding((opts, value) -> AngelicaConfig.disableF3Additions = value, opts -> AngelicaConfig.disableF3Additions)
+                        .build())
+                .add(OptionImpl.createBuilder(boolean.class, angelicaOpts)
+                        .setName(I18n.format("options.angelica.verbosef3"))
+                        .setTooltip(I18n.format("options.angelica.verbosef3.tooltip"))
+                        .setControl(TickBoxControl::new)
+                        .setBinding((opts, value) -> AngelicaConfig.verboseF3 = value, opts -> AngelicaConfig.verboseF3)
                         .build())
                 .build());
 

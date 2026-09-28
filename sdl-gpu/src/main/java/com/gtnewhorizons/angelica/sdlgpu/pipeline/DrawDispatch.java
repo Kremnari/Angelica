@@ -92,7 +92,7 @@ public final class DrawDispatch {
             return false;
         }
         setPrimitiveTypeForDraw(st, FormatMap.mapPrimitiveType(mode));
-        pipelineApplier.ensureRenderPass(st, f);
+        pipelineApplier.ensureDrawRenderPass(st, f);
         if (!frameManager.isRenderPassActive(f)) {
             f.droppedDrawsThisFrame++;
             if (!prepareRpInactiveWarned) {
@@ -109,6 +109,7 @@ public final class DrawDispatch {
     }
 
     public void issueIndexedDraw(ContextState st, long rp, int ebo, int indexType, int count, int instances, int firstIndex, int baseVertex) {
+        if (count <= 0 || instances <= 0) return;
         final EBOSplitScanner.EboSplit[] full;
         if (st.primitiveRestartEnabled) {
             full = resourceManager.getOrScanSplits(ebo, indexType, st.primitiveRestartSentinel);
@@ -142,7 +143,7 @@ public final class DrawDispatch {
             st.fanIndexBuffer = createFanIndexBuffer(st.fanIndexBufferCapacity);
             st.fanIndexBufferOffset = 0;
         } else if (st.fanIndexBufferOffset + indexDataSize > st.fanIndexBufferCapacity) {
-            frameManager.endRenderPassIfActive();
+            frameManager.endRenderPassIfActive(FrameManager.PASS_END_COPY);
             resourceManager.releaseBufferDeferred(st.fanIndexBuffer);
             st.fanIndexBufferCapacity = Math.max(indexDataSize, st.fanIndexBufferCapacity * 2);
             st.fanIndexBuffer = createFanIndexBuffer(st.fanIndexBufferCapacity);
@@ -179,7 +180,7 @@ public final class DrawDispatch {
         st.fanIndexBufferOffset += indexDataSize;
 
         setPrimitiveTypeForDraw(st, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST);
-        pipelineApplier.ensureRenderPass(st);
+        pipelineApplier.ensureDrawRenderPass(st);
         if (!frameManager.isRenderPassActive()) return false;
         if (!pipelineApplier.applyPipelineAndState(st)) return false;
 

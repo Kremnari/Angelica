@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.sdlgpu.shader;
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.GlslTransformUtils;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
+import com.gtnewhorizons.angelica.glsm.hooks.PerFrameUniformBlock;
 import com.gtnewhorizons.angelica.glsm.hooks.ShaderWorkSubmitter;
 import com.gtnewhorizons.angelica.glsm.shader.GlslVulkanPreprocess;
 import com.gtnewhorizons.angelica.glsm.shader.GlslVulkanPreprocess.Edit;
@@ -82,14 +83,42 @@ public final class ShaderManager {
     private final Int2ObjectOpenHashMap<ShaderObject> shaderObjects = new Int2ObjectOpenHashMap<>();
     private final Int2ObjectOpenHashMap<ProgramObject> programObjects = new Int2ObjectOpenHashMap<>();
 
+    private record VertexInputSetKey(int mask, int[] vecSize, int[] baseType) {
+        @Override public boolean equals(Object o) {
+            if (!(o instanceof VertexInputSetKey k)) return false;
+            return mask == k.mask && Arrays.equals(vecSize, k.vecSize) && Arrays.equals(baseType, k.baseType);
+        }
+        @Override public int hashCode() {
+            return (mask * 31 + Arrays.hashCode(vecSize)) * 31 + Arrays.hashCode(baseType);
+        }
+    }
+
+    private final HashMap<VertexInputSetKey, Integer> vertexInputSetIds = new HashMap<>();
+    private int nextVertexInputSetId = 1;
+
+    private int internVertexInputSet(int mask, int[] vecSize, int[] baseType) {
+        final VertexInputSetKey key = new VertexInputSetKey(mask, vecSize.clone(), baseType.clone());
+        final Integer existing = vertexInputSetIds.get(key);
+        if (existing != null) return existing;
+        final int id = nextVertexInputSetId++;
+        vertexInputSetIds.put(key, id);
+        return id;
+    }
+
     private record PrewarmKey(String source, int glShaderType) {}
     private record PrewarmEntry(byte[] remappedSpirv, StageReflection reflection, GraphicsBindingMap graphicsBindingMap, Set<String> boolUniforms, String transformedSource) {}
     private record PrewarmHit(ByteBuffer spirv, StageReflection reflection, GraphicsBindingMap graphicsBindingMap, Set<String> boolUniforms, String transformedSource) {}
     private static final int PREWARM_CACHE_MAX = 256;
     private static final Object2ObjectLinkedOpenHashMap<PrewarmKey, PrewarmEntry> PREWARM_CACHE = new Object2ObjectLinkedOpenHashMap<>();
 
+    private record TransformKey(String source, int glShaderType, PerFrameUniformBlock perFrame, PerFrameUniformBlock perPass) {}
+    private record TransformEntry(String source, Set<String> boolUniforms) {}
+    private static final int TRANSFORM_CACHE_MAX = 256;
+    private static final Object2ObjectLinkedOpenHashMap<TransformKey, TransformEntry> TRANSFORM_CACHE = new Object2ObjectLinkedOpenHashMap<>();
+
     public static void clearPrewarmCache() {
         synchronized (PREWARM_CACHE) { PREWARM_CACHE.clear(); }
+        synchronized (TRANSFORM_CACHE) { TRANSFORM_CACHE.clear(); }
     }
 
     private static PrewarmHit lookupPrewarm(String src, int glShaderType) {
@@ -133,24 +162,35 @@ public final class ShaderManager {
             return;
         }
 
-        final GlslVulkanPreprocess.Result pre = GlslVulkanPreprocess.run(raw, obj.type, "shader" + shader, true);
-        obj.boolUniforms = pre != null ? pre.boolUniforms() : Set.of();
-        String src = pre != null ? pre.rewrittenSource() : raw;
-        if (obj.isVertex()) {
-            src = ClipZRemap.injectGLToVulkanClipZ(src);
+        final TransformKey transformKey = new TransformKey(raw, obj.type, GLSMHooks.perFrameUniformBlock, GLSMHooks.perPassUniformBlock);
+        TransformEntry transformed;
+        synchronized (TRANSFORM_CACHE) {
+            transformed = TRANSFORM_CACHE.getAndMoveToFirst(transformKey);
         }
-        src = SamplerStripper.stripUnused(src);
-        if (obj.type == GL20.GL_VERTEX_SHADER || obj.type == GL20.GL_FRAGMENT_SHADER) {
-            src = PerFrameBlockInjector.inject(src, GLSMHooks.perFrameUniformBlock, GLSMHooks.perPassUniformBlock);
+        if (transformed == null) {
+            final GlslVulkanPreprocess.Result pre = GlslVulkanPreprocess.run(raw, obj.type, "shader" + shader, true);
+            String src = pre != null ? pre.rewrittenSource() : raw;
+            if (obj.isVertex()) {
+                src = ClipZRemap.injectGLToVulkanClipZ(src);
+            }
+            src = SamplerStripper.stripUnused(src);
+            if (obj.type == GL20.GL_VERTEX_SHADER || obj.type == GL20.GL_FRAGMENT_SHADER) {
+                src = PerFrameBlockInjector.inject(src, GLSMHooks.perFrameUniformBlock, GLSMHooks.perPassUniformBlock);
+            }
+            transformed = new TransformEntry(src, pre != null ? pre.boolUniforms() : Set.of());
+            synchronized (TRANSFORM_CACHE) {
+                TRANSFORM_CACHE.putAndMoveToFirst(transformKey, transformed);
+                while (TRANSFORM_CACHE.size() > TRANSFORM_CACHE_MAX) TRANSFORM_CACHE.removeLast();
+            }
         }
-
-        obj.source = src;
+        obj.boolUniforms = transformed.boolUniforms();
+        obj.source = transformed.source();
 
         final ShaderWorkSubmitter submitter = GLSMHooks.shaderWorkSubmitter;
         if (submitter != null) {
             final int shaderKind = shaderKindFor(obj);
             final int glType = obj.type;
-            final String finalSrc = src;
+            final String finalSrc = obj.source;
             obj.spirvFuture = submitter.submit(() -> {
                 final SpirvCompiler.Result r = SpirvCompiler.compile(finalSrc, shaderKind, "shader" + shader, SpirvCompiler.Options.vulkanForced460Core());
                 if (r.spirv() != null && (glType == GL20.GL_VERTEX_SHADER || glType == GL20.GL_FRAGMENT_SHADER)) {
@@ -391,12 +431,14 @@ public final class ShaderManager {
         prog.vertexSpirv = copyBuffer(vs.spirv);
         prog.fragmentSpirv = copyBuffer(fs.spirv);
         prog.vertexSource = vs.source;
+        prog.fragmentSource = fs.source;
         prog.vertexReflection = vs.reflection;
         prog.maxFragOutputLocation = fs.reflection.maxOutputLocation();
         dumpLinkedSource(program, vs.source, fs.source);
 
-        applyVaryingMatch(prog, vs.reflection, fs.reflection);
+        applyVaryingMatch(prog.fragmentSpirv, vs.reflection, fs.reflection);
         applyAttribLocationsAndInputMask(prog, vs.reflection);
+        prog.vertexInputSetId = internVertexInputSet(prog.vertexInputMask, prog.vertexInputVecSize, prog.vertexInputBaseType);
 
         prog.vertexResources = vs.reflection.counts();
         prog.fragmentResources = fs.reflection.counts();
@@ -574,11 +616,11 @@ public final class ShaderManager {
         return loc;
     }
 
-    private static void applyVaryingMatch(ProgramObject prog, StageReflection vs, StageReflection fs) {
-        if (vs.vsOutputs().isEmpty() || fs.fsInputs().isEmpty() || prog.fragmentSpirv == null) return;
+    private static void applyVaryingMatch(ByteBuffer fragmentSpirv, StageReflection vs, StageReflection fs) {
+        if (vs.vsOutputs().isEmpty() || fs.fsInputs().isEmpty() || fragmentSpirv == null) return;
         final HashMap<String, Integer> vsOutLocs = new HashMap<>(vs.vsOutputs().size() * 2);
         for (VsOutput o : vs.vsOutputs()) vsOutLocs.put(o.name(), o.originalLocation());
-        final IntBuffer fsBuf = prog.fragmentSpirv.asIntBuffer();
+        final IntBuffer fsBuf = fragmentSpirv.asIntBuffer();
         for (FsInput fi : fs.fsInputs()) {
             final Integer vsLoc = vsOutLocs.get(fi.name());
             if (vsLoc == null || vsLoc == fi.originalLocation()) continue;
@@ -744,6 +786,79 @@ public final class ShaderManager {
         }
     }
 
+    public LogicOpVariant getOrBuildLogicOpVariant(int program, long key) {
+        final ProgramObject prog = programObjects.get(program);
+        if (prog == null || !prog.linked || prog.fragmentSource.isEmpty()) {
+            throw new IllegalStateException("glLogicOp variant: program " + program + " is not a linked graphics program");
+        }
+        final LogicOpVariant hit = prog.logicOpVariants.get(key);
+        if (hit != null) return hit;
+        final LogicOpVariant built = buildLogicOpVariant(program, prog, key);
+        prog.logicOpVariants.put(key, built);
+        return built;
+    }
+
+    private LogicOpVariant buildLogicOpVariant(int program, ProgramObject prog, long key) {
+        final String preprocessed = SpirvCompiler.preprocess(prog.fragmentSource, Shaderc.shaderc_fragment_shader, "logicop" + program, SpirvCompiler.Options.vulkanForced460Core());
+        if (preprocessed == null) throw new IllegalStateException("glLogicOp variant: program " + program + " fragment preprocessing failed");
+        final String src = LogicOpLowering.lower(preprocessed, key, program);
+        if (SystemProperties.dumpShaders()) dumpLogicOpSource(program, key, src);
+        final SpirvCompiler.Result r = SpirvCompiler.compile(src, Shaderc.shaderc_fragment_shader, "logicop" + program, SpirvCompiler.Options.vulkanForced460Core());
+        if (r.spirv() == null) throw new IllegalStateException("glLogicOp variant: program " + program + " failed to compile: " + r.error());
+        try {
+            final GraphicsBindingMap bindingMap = remapSpirvForSDLGPU(r.spirv(), GL20.GL_FRAGMENT_SHADER);
+            final StageReflection refl = reflectStage(r.spirv(), false);
+            final ResourceCounts base = prog.fragmentResources;
+            final ResourceCounts counts = refl.counts();
+            if (counts.numUBOs() != base.numUBOs() || counts.numStorageBuffers() != base.numStorageBuffers() || counts.numStorageTextures() != base.numStorageTextures()
+                    || !Arrays.equals(bindingMap.roStorageTextureGlSlots(), prog.fragmentGraphicsBindingMap.roStorageTextureGlSlots())
+                    || !Arrays.equals(bindingMap.roSsboGlSlots(), prog.fragmentGraphicsBindingMap.roSsboGlSlots())) {
+                throw new IllegalStateException("glLogicOp variant: program " + program + " variant resources " + counts + " differ from base " + base);
+            }
+            final List<String> names = refl.samplerNames();
+            final List<String> baseNames = prog.fragmentSamplerNames;
+            final int extra = names.size() - baseNames.size();
+            if (extra < 0 || !names.subList(0, baseNames.size()).equals(baseNames)) {
+                throw new IllegalStateException("glLogicOp variant: program " + program + " sampler order " + names + " does not extend base " + baseNames);
+            }
+            final byte[] dstLocation = new byte[extra];
+            int prev = -1;
+            for (int i = 0; i < extra; i++) {
+                final String name = names.get(baseNames.size() + i);
+                if (!name.startsWith(LogicOpLowering.DST_SAMPLER_PREFIX)) {
+                    throw new IllegalStateException("glLogicOp variant: program " + program + " unexpected appended sampler " + name);
+                }
+                final int loc = Integer.parseInt(name.substring(LogicOpLowering.DST_SAMPLER_PREFIX.length()));
+                if (loc <= prev || LogicOpFormats.classAt(key, loc) == 0) {
+                    throw new IllegalStateException("glLogicOp variant: program " + program + " appended samplers " + names.subList(baseNames.size(), names.size()) + " are not in location order");
+                }
+                prev = loc;
+                dstLocation[i] = (byte) loc;
+            }
+            applyVaryingMatch(r.spirv(), prog.vertexReflection, refl);
+            final long shader = createSDLShader(r.spirv(), SDL_GPU_SHADERSTAGE_FRAGMENT, counts.numSamplers(), counts.numUBOs(), counts.numStorageBuffers(), counts.numStorageTextures());
+            if (shader == 0) throw new IllegalStateException("glLogicOp variant: program " + program + " shader creation failed: " + SDLError.SDL_GetError());
+            final LogicOpVariant v = new LogicOpVariant();
+            v.sdlShader = shader;
+            v.numSamplers = names.size();
+            v.baseSamplers = baseNames.size();
+            v.dstLocation = dstLocation;
+            return v;
+        } finally {
+            memFree(r.spirv());
+        }
+    }
+
+    private static void dumpLogicOpSource(int program, long key, String src) {
+        try {
+            final Path dir = Path.of("patched_shaders");
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("logicop_" + program + "_" + Long.toHexString(key) + ".fsh"), src);
+        } catch (IOException e) {
+            LOG.warn("Failed to dump glLogicOp variant for program {}: {}", program, e.toString());
+        }
+    }
+
     private static boolean linkDumpDirCleared;
 
     private static void dumpLinkedSource(int program, String vertexSrc, String fragmentSrc) {
@@ -798,6 +913,10 @@ public final class ShaderManager {
         }
         prog.vertexVariants.clear();
         prog.vertexVariantFailed.clear();
+        for (LogicOpVariant v : prog.logicOpVariants.values()) {
+            if (v.sdlShader != 0) SDL_ReleaseGPUShader(dev, v.sdlShader);
+        }
+        prog.logicOpVariants.clear();
         if (prog.sdlVertexShader   != 0) { SDL_ReleaseGPUShader(dev, prog.sdlVertexShader);   prog.sdlVertexShader   = 0; }
         if (prog.sdlFragmentShader != 0) { SDL_ReleaseGPUShader(dev, prog.sdlFragmentShader); prog.sdlFragmentShader = 0; }
         if (prog.sdlComputePipeline != 0) { SDL_ReleaseGPUComputePipeline(dev, prog.sdlComputePipeline); prog.sdlComputePipeline = 0; }
@@ -1226,13 +1345,19 @@ public final class ShaderManager {
     }
 
     private static int collectResourceIds(long resources, long compiler, int resourceType, Int2IntOpenHashMap idToNewSet, Int2IntOpenHashMap idToNewBinding, int targetSet, int nextBinding, MemoryStack stack) {
-        final int[] next = { nextBinding };
-        forEachResource(resources, resourceType, stack, (j, res) -> {
-            final int spvId = res.id();
+        final PointerBuffer pList = stack.pointers(0);
+        final PointerBuffer pCount = stack.pointers(0);
+        if (Spvc.spvc_resources_get_resource_list_for_type(resources, resourceType, pList, pCount) != Spvc.SPVC_SUCCESS) return nextBinding;
+        final int count = (int) pCount.get(0);
+        if (count == 0) return nextBinding;
+        final SpvcReflectedResource.Buffer list = SpvcReflectedResource.create(pList.get(0), count);
+        int next = nextBinding;
+        for (int j = 0; j < count; j++) {
+            final int spvId = list.get(j).id();
             idToNewSet.put(spvId, targetSet);
-            idToNewBinding.put(spvId, next[0]++);
-        });
-        return next[0];
+            idToNewBinding.put(spvId, next++);
+        }
+        return next;
     }
 
     private static ByteBuffer copyBuffer(ByteBuffer src) {
@@ -1698,6 +1823,8 @@ public final class ShaderManager {
         public StageReflection vertexReflection = StageReflection.EMPTY;
         public final Long2ObjectOpenHashMap<VertexVariant> vertexVariants = new Long2ObjectOpenHashMap<>();
         public final LongOpenHashSet vertexVariantFailed = new LongOpenHashSet();
+        public String fragmentSource = "";
+        public final Long2ObjectOpenHashMap<LogicOpVariant> logicOpVariants = new Long2ObjectOpenHashMap<>();
         public final Object2IntOpenHashMap<String> attribLocationBindings = newLocMap();
         public final Object2IntOpenHashMap<String> resolvedAttribLocations = newLocMap();
         public final Object2IntOpenHashMap<String> nameToLocation = newLocMap();
@@ -1708,7 +1835,17 @@ public final class ShaderManager {
         public int[] fragmentSamplerUnits = EMPTY_UNITS;
         public boolean samplerUnitsDirty = true;
 
+        public static final byte LOCATION_KIND_PLAIN = 0;
+        public static final byte LOCATION_KIND_SAMPLER = 1;
+        public static final byte LOCATION_KIND_IMAGE = 2;
+
+        public byte[] locationKind = EMPTY_KIND;
+        public String[] locationName = EMPTY_NAMES;
+        public int[] locationSamplerUnit = EMPTY_UNITS;
+
         private static final int[] EMPTY_UNITS = new int[0];
+        private static final byte[] EMPTY_KIND = new byte[0];
+        private static final String[] EMPTY_NAMES = new String[0];
 
         private static Object2IntOpenHashMap<String> newLocMap() {
             final Object2IntOpenHashMap<String> m = new Object2IntOpenHashMap<>();
@@ -1769,6 +1906,7 @@ public final class ShaderManager {
         public int geometryShader;
         public int nextUniformLocation = 0;
         public int vertexInputMask;
+        public int vertexInputSetId;
         public int vertexShader;
         public int vertexUboSize;
         public long sdlComputePipeline;
@@ -1783,6 +1921,21 @@ public final class ShaderManager {
             uniformSlotCount = n;
             vsInfoBySlot = new UniformMemberInfo[n];
             fsInfoBySlot = new UniformMemberInfo[n];
+            locationKind = new byte[n];
+            locationName = new String[n];
+            locationSamplerUnit = new int[n];
+            Arrays.fill(locationSamplerUnit, -1);
+            for (int loc = 0; loc < n; loc++) {
+                final String name = locationToName.get(loc);
+                locationName[loc] = name;
+                if (name != null && allSamplerNames.contains(name)) {
+                    locationKind[loc] = LOCATION_KIND_SAMPLER;
+                } else if (name != null && allImageNames.contains(name)) {
+                    locationKind[loc] = LOCATION_KIND_IMAGE;
+                } else {
+                    locationKind[loc] = LOCATION_KIND_PLAIN;
+                }
+            }
             for (int b = 0; b < BLOCK_COUNT; b++) {
                 blockInfoBySlot[b] = new UniformMemberInfo[n];
                 for (var it = blockMemberInfo[b].int2ObjectEntrySet().fastIterator(); it.hasNext(); ) {

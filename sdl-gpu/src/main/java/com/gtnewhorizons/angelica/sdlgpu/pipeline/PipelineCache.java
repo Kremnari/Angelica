@@ -52,6 +52,7 @@ public final class PipelineCache {
     private boolean outputDirty = true;
     private boolean shaderDirty = true;
     private boolean inputDirty  = true;
+    private boolean usesBlendConstants;
 
     private long cachedOutputHash;
     private long cachedShaderHash;
@@ -59,11 +60,12 @@ public final class PipelineCache {
 
     public int primitiveType = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
 
-    public final boolean[] blendEnabledPerAttachment = new boolean[ContextState.MAX_COLOR_ATTACHMENTS];
-    public int srcColorFactor = SDL_GPU_BLENDFACTOR_ONE;
-    public int dstColorFactor = SDL_GPU_BLENDFACTOR_ZERO;
-    public int srcAlphaFactor = SDL_GPU_BLENDFACTOR_ONE;
-    public int dstAlphaFactor = SDL_GPU_BLENDFACTOR_ZERO;
+    public final boolean[] blendEnabledPerDrawBuffer = new boolean[ContextState.MAX_COLOR_ATTACHMENTS];
+    public boolean logicOpEnabled;
+    public final int[] srcColorFactors = new int[ContextState.MAX_COLOR_ATTACHMENTS];
+    public final int[] dstColorFactors = new int[ContextState.MAX_COLOR_ATTACHMENTS];
+    public final int[] srcAlphaFactors = new int[ContextState.MAX_COLOR_ATTACHMENTS];
+    public final int[] dstAlphaFactors = new int[ContextState.MAX_COLOR_ATTACHMENTS];
     public int colorBlendOp = SDL_GPU_BLENDOP_ADD;
     public int alphaBlendOp = SDL_GPU_BLENDOP_ADD;
 
@@ -160,18 +162,41 @@ public final class PipelineCache {
         return true;
     }
 
-    private int attachmentForSlot(int slot) {
-        final int[] db = drawBuffers;
-        if (db == null || slot < 0 || slot >= db.length) return 0;
-        final int idx = db[slot];
-        return (idx >= 0 && idx < ContextState.MAX_COLOR_ATTACHMENTS) ? idx : 0;
-    }
-
     private boolean blendEnabledForSlot(int slot) {
-        return blendEnabledPerAttachment[attachmentForSlot(slot)];
+        return !logicOpEnabled && slot >= 0 && slot < ContextState.MAX_COLOR_ATTACHMENTS && blendEnabledPerDrawBuffer[slot];
     }
 
-    public int maxAttribs;
+    public boolean setBlendFactors(int sc, int dc, int sa, int da) {
+        boolean changed = false;
+        for (int i = 0; i < ContextState.MAX_COLOR_ATTACHMENTS; i++) {
+            if (srcColorFactors[i] != sc || dstColorFactors[i] != dc || srcAlphaFactors[i] != sa || dstAlphaFactors[i] != da) {
+                srcColorFactors[i] = sc;
+                dstColorFactors[i] = dc;
+                srcAlphaFactors[i] = sa;
+                dstAlphaFactors[i] = da;
+                changed = true;
+            }
+        }
+        if (changed) markOutputDirty();
+        return changed;
+    }
+
+    public boolean setBlendFactors(int drawBuffer, int sc, int dc, int sa, int da) {
+        if (srcColorFactors[drawBuffer] == sc && dstColorFactors[drawBuffer] == dc && srcAlphaFactors[drawBuffer] == sa && dstAlphaFactors[drawBuffer] == da) {
+            return false;
+        }
+        srcColorFactors[drawBuffer] = sc;
+        dstColorFactors[drawBuffer] = dc;
+        srcAlphaFactors[drawBuffer] = sa;
+        dstAlphaFactors[drawBuffer] = da;
+        markOutputDirty();
+        return true;
+    }
+
+    private int maxAttribs;
+    private int shaderInputSetId;
+    public int inputHashLoopRuns;
+    public int inputHashHits;
 
     private static final int[] EMPTY_INT = new int[0];
     private static final String[] EMPTY_STR = new String[0];
@@ -183,10 +208,22 @@ public final class PipelineCache {
 
     public PipelineCache() {
         this.maxAttribs = ContextState.MAX_VERTEX_ATTRIBS;
+        Arrays.fill(srcColorFactors, SDL_GPU_BLENDFACTOR_ONE);
+        Arrays.fill(dstColorFactors, SDL_GPU_BLENDFACTOR_ZERO);
+        Arrays.fill(srcAlphaFactors, SDL_GPU_BLENDFACTOR_ONE);
+        Arrays.fill(dstAlphaFactors, SDL_GPU_BLENDFACTOR_ZERO);
     }
 
     long lastKey() {
         return lastKey;
+    }
+
+    public int maxAttribs() { return maxAttribs; }
+
+    public void setMaxAttribs(int n) {
+        if (maxAttribs == n) return;
+        maxAttribs = n;
+        markInputDirty();
     }
 
     public void markInputDirty()  { inputDirty  = true; lastKey = 0L; }
@@ -199,8 +236,42 @@ public final class PipelineCache {
         return true;
     }
 
-    public void markOutputDirty() { outputDirty = true; lastKey = 0L; }
+    public void setVertexInputs(int mask, int[] vecSize, int[] baseType, String[] names, int vertexInputSetId) {
+        if (shaderInputSetId != vertexInputSetId) {
+            markInputDirty();
+        }
+        shaderInputSetId = vertexInputSetId;
+        shaderInputMask = mask;
+        shaderInputVecSize = vecSize;
+        shaderInputBaseType = baseType;
+        shaderInputName = names;
+    }
+
+    public void markOutputDirty() {
+        outputDirty = true;
+        lastKey = 0L;
+        usesBlendConstants = computeUsesBlendConstants();
+    }
     public void markShaderDirty() { shaderDirty = true; lastKey = 0L; }
+
+    public boolean usesBlendConstants() {
+        return usesBlendConstants;
+    }
+
+    private boolean computeUsesBlendConstants() {
+        for (int i = 0; i < ContextState.MAX_COLOR_ATTACHMENTS; i++) {
+            if (!blendEnabledForSlot(i)) continue;
+            if (isBlendConstantFactor(srcColorFactors[i]) || isBlendConstantFactor(dstColorFactors[i])
+                || isBlendConstantFactor(srcAlphaFactors[i]) || isBlendConstantFactor(dstAlphaFactors[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isBlendConstantFactor(int factor) {
+        return factor == SDL_GPU_BLENDFACTOR_CONSTANT_COLOR || factor == SDL_GPU_BLENDFACTOR_ONE_MINUS_CONSTANT_COLOR;
+    }
 
     public void invalidateShaderHandles() {
         vertexShader = 0;
@@ -296,9 +367,11 @@ public final class PipelineCache {
             | (((long) blendBits & 0xFFFFFFFFL) << 32);
         long h = OUTPUT_SEED;
         h = Hashing.fmix64(h, bits);
-        h = Hashing.fmix64(h, Hashing.packHiLo(primitiveType, srcColorFactor));
-        h = Hashing.fmix64(h, Hashing.packHiLo(dstColorFactor, srcAlphaFactor));
-        h = Hashing.fmix64(h, Hashing.packHiLo(dstAlphaFactor, colorBlendOp));
+        h = Hashing.fmix64(h, Hashing.packHiLo(primitiveType, colorBlendOp));
+        for (int i = 0; i < ctfLen; i++) {
+            h = Hashing.fmix64(h, Hashing.packHiLo(srcColorFactors[i], dstColorFactors[i]));
+            h = Hashing.fmix64(h, Hashing.packHiLo(srcAlphaFactors[i], dstAlphaFactors[i]));
+        }
         h = Hashing.fmix64(h, Hashing.packHiLo(alphaBlendOp, depthCompareOp));
         h = Hashing.fmix64(h, Hashing.packHiLo(stencilFrontCompareOp, stencilFrontFailOp));
         h = Hashing.fmix64(h, Hashing.packHiLo(stencilFrontDepthFailOp, stencilFrontPassOp));
@@ -325,10 +398,27 @@ public final class PipelineCache {
     }
 
     private long computeInputHash(PipelineStore store, ContextState cs) {
+        if (cs == null) {
+            return Hashing.fmix64(INPUT_SEED, Hashing.packHiLo(shaderInputMask, maxAttribs));
+        }
+        final ContextState.VAOState vao = cs.currentVao;
+        final int livenessGen = store.livenessGen();
+        if (vao.slotsLivenessGen != livenessGen) {
+            Arrays.fill(vao.slotInputSetId, 0);
+            vao.slotsLivenessGen = livenessGen;
+        }
+        final int enabledMask = vao.attribEnabledMask;
+        for (int s = 0; s < ContextState.VAOState.INPUT_HASH_SLOTS; s++) {
+            final int id = vao.slotInputSetId[s];
+            if (id == 0) continue;
+            if (id == shaderInputSetId && vao.slotEnabledMask[s] == enabledMask && vao.slotMaxAttribs[s] == maxAttribs) {
+                if (Tracy.ENABLED) inputHashHits++;
+                return vao.slotHash[s];
+            }
+        }
+        inputHashLoopRuns++;
         long h = INPUT_SEED;
         h = Hashing.fmix64(h, Hashing.packHiLo(shaderInputMask, maxAttribs));
-        if (cs == null) return h;
-        final ContextState.VAOState vao = cs.currentVao;
         final int sibtLen = shaderInputBaseType.length;
         final int sivsLen = shaderInputVecSize.length;
 
@@ -342,6 +432,7 @@ public final class PipelineCache {
                     | (((long) vao.attribType[i] & 0xFFFFL) << 16)
                     | ((vao.attribNormalized[i] ? 1L : 0L) << 32)
                     | ((vao.attribIsInteger[i] ? 1L : 0L) << 33)
+                    | (((long) vertexOffsetMisalign(vao.bindingOffset[b]) & 3L) << 34)
                     | (((long) b & 0xFF) << 40)
                     | (((long) vao.attribStride[i] & 0xFFFFL) << 48);
                 final long w1 =
@@ -355,6 +446,12 @@ public final class PipelineCache {
                 h = Hashing.fmix64(h, Hashing.packHiLo(i, shaderInputVecSize[i]));
             }
         }
+        final int slot = vao.slotCursor;
+        vao.slotInputSetId[slot] = shaderInputSetId;
+        vao.slotEnabledMask[slot] = enabledMask;
+        vao.slotMaxAttribs[slot] = maxAttribs;
+        vao.slotHash[slot] = h;
+        vao.slotCursor = (slot + 1) % ContextState.VAOState.INPUT_HASH_SLOTS;
         return h;
     }
 
@@ -390,11 +487,11 @@ public final class PipelineCache {
                 desc.format(colorTargetFormats()[i]);
                 desc.blend_state()
                     .enable_blend(blendEnabledForSlot(i))
-                    .src_color_blendfactor(srcColorFactor)
-                    .dst_color_blendfactor(dstColorFactor)
+                    .src_color_blendfactor(srcColorFactors[i])
+                    .dst_color_blendfactor(dstColorFactors[i])
                     .color_blend_op(colorBlendOp)
-                    .src_alpha_blendfactor(srcAlphaFactor)
-                    .dst_alpha_blendfactor(dstAlphaFactor)
+                    .src_alpha_blendfactor(srcAlphaFactors[i])
+                    .dst_alpha_blendfactor(dstAlphaFactors[i])
                     .alpha_blend_op(alphaBlendOp)
                     .color_write_mask((byte) colorWriteMask)
                     .enable_color_write_mask(true);
@@ -504,8 +601,10 @@ public final class PipelineCache {
               .append(" backCmp=").append(stencilBackCompareOp).append('\n');
         }
         sb.append("  Blend: enabled=").append(blendEnabledForSlot(0))
-          .append(" srcColor=").append(srcColorFactor).append(" dstColor=").append(dstColorFactor).append(" colorOp=").append(colorBlendOp)
-          .append(" srcAlpha=").append(srcAlphaFactor).append(" dstAlpha=").append(dstAlphaFactor).append(" alphaOp=").append(alphaBlendOp)
+          .append(" srcColor=").append(srcColorFactors[0]).append(" dstColor=").append(dstColorFactors[0])
+          .append(" colorOp=").append(colorBlendOp)
+          .append(" srcAlpha=").append(srcAlphaFactors[0]).append(" dstAlpha=").append(dstAlphaFactors[0])
+          .append(" alphaOp=").append(alphaBlendOp)
           .append(" mask=0x").append(Integer.toHexString(colorWriteMask)).append('\n');
         sb.append("  Rasterizer: cull=").append(getEffectiveCullMode())
           .append(" front=").append(effectiveFrontFace())
@@ -624,6 +723,16 @@ public final class PipelineCache {
 
     private static final int GL_TYPE_BASE = GL11.GL_BYTE;
     static final int INVALID_FMT = -1;
+
+    public static final int VERTEX_BUFFER_OFFSET_ALIGN = 4;
+
+    public static int vertexOffsetBase(long bindingOffset) {
+        return (int) (bindingOffset & ~(VERTEX_BUFFER_OFFSET_ALIGN - 1));
+    }
+
+    public static int vertexOffsetMisalign(long bindingOffset) {
+        return (int) (bindingOffset & (VERTEX_BUFFER_OFFSET_ALIGN - 1));
+    }
     private static final int[][] VTX_FMT = buildVertexFormatTable();
 
     private static int[] fmtSame(int s1, int s2, int s3, int s4) {
@@ -801,7 +910,7 @@ public final class PipelineCache {
                 final int boundStride = vao.bindingStride[b];
                 final int stride = boundStride != 0 ? boundStride : (vao.attribStride[i] != 0 ? vao.attribStride[i] : vao.attribSize[i] * GLTypes.sizeBytes(vao.attribType[i]));
                 final int divisor = vao.bindingDivisor[b];
-                final int relOff = vao.attribRelativeOffset[i];
+                final int relOff = vao.attribRelativeOffset[i] + vertexOffsetMisalign(vao.bindingOffset[b]);
                 final int attribAlign = GLTypes.sizeBytes(vao.attribType[i]);
                 if (attribAlign > 0 && (stride % attribAlign) != 0) {
                     LOG.warn("[PipelineCache] unaligned vertex stride: location={} stride={} type=0x{} size={} -- attribAddress will not satisfy format alignment; fix producer", i, stride, Integer.toHexString(vao.attribType[i]), vao.attribSize[i]);

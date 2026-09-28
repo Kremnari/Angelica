@@ -98,6 +98,8 @@ public class CTMUtils {
         private final TileOverrideIterator.IJK ijkIterator = CTMUtils.newIJKIterator();
         private final TileOverrideIterator.Metadata metadataIterator = CTMUtils.newMetadataIterator();
         private final BlockOrientation renderBlockState = new BlockOrientation();
+        private IIcon originalIcon;
+        private IIcon replacementIcon;
         private final int texturePackChangeCounter;
 
         public StateAndIterator() {
@@ -279,6 +281,7 @@ public class CTMUtils {
                 lock.unlockRead(stamp);
             }
         }
+        rememberOriginalIcon(icon, value);
         return value;
     }
 
@@ -293,7 +296,20 @@ public class CTMUtils {
                 lock.unlockRead(stamp);
             }
         }
+        rememberOriginalIcon(icon, value);
         return value;
+    }
+
+    private static void rememberOriginalIcon(IIcon original, IIcon replacement) {
+        final StateAndIterator state = stateAndIterator.get();
+        state.originalIcon = original;
+        state.replacementIcon = replacement;
+    }
+
+    /** Retains grass overlay tint semantics when CTM substitutes another texture. */
+    public static IIcon getOriginalIcon(IIcon icon) {
+        final StateAndIterator state = stateAndIterator.get();
+        return state.replacementIcon == icon ? state.originalIcon : icon;
     }
 
     public static IIcon getBlockIcon(IIcon icon, Block block, int face) {

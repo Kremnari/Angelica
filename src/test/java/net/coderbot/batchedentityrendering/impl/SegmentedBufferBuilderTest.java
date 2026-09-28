@@ -1,8 +1,14 @@
 package net.coderbot.batchedentityrendering.impl;
 
 import com.gtnewhorizon.gtnhlib.client.renderer.cel.model.quad.ModelQuad;
+import com.gtnewhorizons.angelica.api.tesr.TesrMaterial;
 import com.gtnewhorizons.angelica.compat.mojang.RenderLayer;
+import com.gtnewhorizons.angelica.rendering.tesr.DrawState;
 import com.gtnewhorizons.angelica.rendering.tesr.TemplateBuffer;
+import com.gtnewhorizons.angelica.shadercompat.ShaderGlint;
+import net.coderbot.iris.layer.PassOverride;
+import net.coderbot.iris.uniforms.CapturedRenderingState;
+import net.minecraft.util.ResourceLocation;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.Test;
@@ -20,18 +26,50 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SegmentedBufferBuilderTest {
 
-    static final class TestLayer extends RenderLayer implements BlendingStateHolder {
-        private final TransparencyType transparencyType;
+    private static final TesrMaterial OPAQUE_MATERIAL = TesrMaterial.CURRENT_STATE;
+    private static final TesrMaterial TRANSLUCENT_MATERIAL = TesrMaterial.builder().translucent().build();
 
-        TestLayer(String name, TransparencyType transparencyType) {
-            super(name, BatchVertexFormats.POSITION_COLOR_TEXTURE_LIGHTF_NORMAL, GL11.GL_QUADS, 256, () -> {}, () -> {});
-            this.transparencyType = transparencyType;
+    @Test
+    void segmentsSnapshotAllIdsAndTintAtQueueTime() {
+        final CapturedRenderingState state = CapturedRenderingState.INSTANCE;
+        state.pushCurrentEntityAndItem();
+        state.pushCurrentBlockEntity();
+        state.pushCurrentEntityColor();
+        try {
+            final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
+            final RenderLayer layer = layer("snapshot", TransparencyType.OPAQUE);
+            for (int i = 0; i < 3; i++) {
+                state.setCurrentEntityAndItem(11 + i, 13);
+                state.setCurrentBlockEntity(12);
+                state.setCurrentEntityColor(i / 2f, 0, 0, 1);
+                builder.begin(layer, 12);
+                builder.addQuad(quad());
+                builder.begin(layer, 12);
+                builder.addQuad(quad());
+            }
+            state.setCurrentEntityAndItem(90, 91);
+            state.setCurrentBlockEntity(92);
+            state.setCurrentEntityColor(0, 1, 0, 0);
+            final var segments = builder.getSegments();
+            assertEquals(3, segments.size(), "adjacent equal states still merge");
+            for (int i = 0; i < 3; i++) {
+                final var segment = segments.get(i);
+                assertEquals(11 + i, segment.getEntityId());
+                assertEquals(12, segment.getRenderedBlockEntityId());
+                assertEquals(13, segment.getItemId());
+                assertEquals(AngelicaBufferSource.packAbgr(i / 2f, 0, 0, 1), segment.getEntityColor());
+                assertEquals(8, segment.getVertexCount());
+            }
+        } finally {
+            state.popCurrentEntityColor();
+            state.popCurrentBlockEntity();
+            state.popCurrentEntityAndItem();
         }
+    }
 
-        @Override
-        public TransparencyType getTransparencyType() {
-            return transparencyType;
-        }
+    static RenderLayer layer(String name, TransparencyType transparencyType) {
+        final TesrMaterial material = transparencyType == TransparencyType.OPAQUE ? OPAQUE_MATERIAL : TRANSLUCENT_MATERIAL;
+        return RenderLayer.tesr(new ResourceLocation("angelicatest", name), material, PassOverride.NONE, 0f, 0f, ShaderGlint.NO_TINT, DrawState.DISABLED, false);
     }
 
     static ModelQuad quad() {
@@ -47,7 +85,7 @@ class SegmentedBufferBuilderTest {
     @Test
     void sameKeyContinuesSegment() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer layer = new TestLayer("a", TransparencyType.OPAQUE);
+        final RenderLayer layer = layer("a", TransparencyType.OPAQUE);
         builder.begin(layer, 5);
         builder.addQuad(quad());
         builder.begin(layer, 5);
@@ -62,8 +100,8 @@ class SegmentedBufferBuilderTest {
     @Test
     void keyChangeSplitsSegments() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer a = new TestLayer("a", TransparencyType.OPAQUE);
-        final TestLayer b = new TestLayer("b", TransparencyType.OPAQUE);
+        final RenderLayer a = layer("a", TransparencyType.OPAQUE);
+        final RenderLayer b = layer("b", TransparencyType.OPAQUE);
         builder.begin(a, 1);
         builder.addQuad(quad());
         builder.begin(a, 2);
@@ -87,8 +125,8 @@ class SegmentedBufferBuilderTest {
     @Test
     void emptySegmentsAreDropped() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer a = new TestLayer("a", TransparencyType.OPAQUE);
-        final TestLayer b = new TestLayer("b", TransparencyType.OPAQUE);
+        final RenderLayer a = layer("a", TransparencyType.OPAQUE);
+        final RenderLayer b = layer("b", TransparencyType.OPAQUE);
         builder.begin(a, 1);
         builder.begin(b, 1);
         builder.addQuad(quad());
@@ -100,7 +138,7 @@ class SegmentedBufferBuilderTest {
     @Test
     void bufferGrowsPastInitialCapacity() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer layer = new TestLayer("a", TransparencyType.OPAQUE);
+        final RenderLayer layer = layer("a", TransparencyType.OPAQUE);
         builder.begin(layer, 1);
         final ModelQuad q = quad();
         final int quads = 3000; // 3000 * 4 * 32B ~ 384KB > 256KB initial
@@ -116,7 +154,7 @@ class SegmentedBufferBuilderTest {
     @Test
     void resetClearsFillState() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer layer = new TestLayer("a", TransparencyType.OPAQUE);
+        final RenderLayer layer = layer("a", TransparencyType.OPAQUE);
         builder.begin(layer, 1);
         builder.addQuad(quad());
         builder.reset();
@@ -127,7 +165,7 @@ class SegmentedBufferBuilderTest {
     @Test
     void addTemplateInstanceTransformsAndExtendsSegment() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer layer = new TestLayer("a", TransparencyType.OPAQUE);
+        final RenderLayer layer = layer("a", TransparencyType.OPAQUE);
 
         builder.begin(layer, 3);
         builder.addTemplateInstance(template(), new Matrix4f().translation(10f, 20f, 30f), new Vector3f(), -1, 0, null);
@@ -151,7 +189,7 @@ class SegmentedBufferBuilderTest {
     @Test
     void reclaimFreesIdleLayerBuffers() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer layer = new TestLayer("a", TransparencyType.OPAQUE);
+        final RenderLayer layer = layer("a", TransparencyType.OPAQUE);
         final long t0 = 100_000L;
 
         builder.begin(layer, 1);
@@ -169,8 +207,8 @@ class SegmentedBufferBuilderTest {
     @Test
     void allocatedBytesTracksBufferLifecycle() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer a = new TestLayer("a", TransparencyType.OPAQUE);
-        final TestLayer b = new TestLayer("b", TransparencyType.OPAQUE);
+        final RenderLayer a = layer("a", TransparencyType.OPAQUE);
+        final RenderLayer b = layer("b", TransparencyType.OPAQUE);
         final long t0 = 100_000L;
         assertEquals(0L, builder.allocatedBytes());
 
@@ -210,8 +248,8 @@ class SegmentedBufferBuilderTest {
     @Test
     void evictionThenReuseKeepsStateConsistent() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer a = new TestLayer("a", TransparencyType.OPAQUE);
-        final TestLayer b = new TestLayer("b", TransparencyType.OPAQUE);
+        final RenderLayer a = layer("a", TransparencyType.OPAQUE);
+        final RenderLayer b = layer("b", TransparencyType.OPAQUE);
         final long t0 = 100_000L;
 
         builder.begin(a, 1);
@@ -238,7 +276,7 @@ class SegmentedBufferBuilderTest {
     @Test
     void freeAllReleasesBuffersAndStaysUsable() {
         final SegmentedBufferBuilder builder = new SegmentedBufferBuilder();
-        final TestLayer layer = new TestLayer("a", TransparencyType.OPAQUE);
+        final RenderLayer layer = layer("a", TransparencyType.OPAQUE);
 
         builder.begin(layer, 1);
         builder.addQuad(quad());
