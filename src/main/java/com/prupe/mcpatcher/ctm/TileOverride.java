@@ -288,6 +288,14 @@ public abstract class TileOverride implements Comparable<TileOverride> {
         for (String token : property.split("\\s+")) {
             if (token.isEmpty()) {
                 // nothing
+            } else if (token.startsWith("oreDict:")) {
+                List<BlockStateMatcher> matchers = BlockAPI.createOreDictMatchers(properties, token.substring(4));
+                if (matchers.isEmpty()) {
+                    properties.fine("unknown/empty ore dictionary tag %s", token.substring(4));
+                    lostScope = true;
+                } else {
+                    blocks.addAll(matchers);
+                }
             } else if (token.matches("\\d+-\\d+")) {
                 for (int id : MCPatcherUtils.parseIntegerList(token, 0, 65535)) {
                     List<BlockStateMatcher> matchers = BlockAPI.createMatchers(properties, id + defaultMetadata);
