@@ -303,9 +303,9 @@ public abstract class TileOverride implements Comparable<TileOverride> {
             if (token.isEmpty()) {
                 // nothing
             } else if (token.startsWith("oreDict:")) {
-                List<BlockStateMatcher> matchers = BlockAPI.createOreDictMatchers(properties, token.substring(4));
+                List<BlockStateMatcher> matchers = BlockAPI.createOreDictMatchers(properties, token.substring(8));
                 if (matchers.isEmpty()) {
-                    properties.fine("unknown/empty ore dictionary tag %s", token.substring(4));
+                    properties.fine("unknown/empty ore dictionary tag %s", token.substring(8));
                     lostScope = true;
                 } else {
                     blocks.addAll(matchers);
