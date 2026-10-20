@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.List;
 
 import com.gtnewhorizons.angelica.compat.bop.FogBiomeCache;
+import com.gtnewhorizons.angelica.render.CloudRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
@@ -56,6 +57,8 @@ import com.gtnewhorizons.angelica.render.WeatherRenderer;
 import com.gtnewhorizons.angelica.rendering.culling.GpuTerrainCuller;
 import com.gtnewhorizons.angelica.rendering.tesr.AngelicaTesrMeshCache;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
+import com.gtnewhorizons.angelica.rendering.tesr.PendingTesrDraws;
+import com.gtnewhorizons.angelica.rendering.tesr.SectionBuiltBlockEntity;
 import com.gtnewhorizons.angelica.rendering.celeritas.api.IrisShaderProvider;
 import com.gtnewhorizons.angelica.rendering.celeritas.api.IrisShaderProviderHolder;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrAttribution;
@@ -119,6 +122,10 @@ public class CeleritasWorldRenderer extends SimpleWorldRenderer<WorldClient, Ang
         return this.renderSectionManager;
     }
 
+    public WorldClient getWorld() {
+        return this.world;
+    }
+
     private long asyncEwmaNanos;
     private long uploadEwmaNanos;
 
@@ -171,6 +178,7 @@ public class CeleritasWorldRenderer extends SimpleWorldRenderer<WorldClient, Ang
         GpuCulling.onWorldUnload();
         FfpExtendedAttribs.reset();
         FogBiomeCache.invalidate();
+        CloudRenderer.getCloudRenderer().invalidateWorld();
         super.unloadWorld();
     }
 
@@ -409,6 +417,7 @@ public class CeleritasWorldRenderer extends SimpleWorldRenderer<WorldClient, Ang
             TileEntityRendererDispatcher.staticPlayerY,
             TileEntityRendererDispatcher.staticPlayerZ);
         ModelPartBatcher.INSTANCE.begin(ModelPartBatcher.Mode.BLOCK_ENTITIES);
+        PendingTesrDraws.beginPass();
         int count = 0;
         if (pass == 0) {
             teRenderContext.set(partialTicks, pass);
@@ -468,6 +477,7 @@ public class CeleritasWorldRenderer extends SimpleWorldRenderer<WorldClient, Ang
                 if (Tracy.ENABLED) Tracy.endZone();
             }
         }
+        PendingTesrDraws.endPass();
         if (Tracy.ENABLED) Tracy.beginZone(Z_TESR_MODEL_PARTS);
         try {
             ModelPartBatcher.INSTANCE.flush();
@@ -593,6 +603,19 @@ public class CeleritasWorldRenderer extends SimpleWorldRenderer<WorldClient, Ang
     }
 
     private void dispatchTE(TileEntity tileEntity, float partialTicks) {
+        if (tileEntity instanceof SectionBuiltBlockEntity built) {
+            final TileEntityRendererDispatcher dispatcher = TileEntityRendererDispatcher.instance;
+            if (!(tileEntity.getDistanceFrom(dispatcher.field_147560_j, dispatcher.field_147561_k, dispatcher.field_147558_l) < tileEntity.getMaxRenderDistanceSquared())) {
+                return;
+            }
+            if (built.angelica$drawBuilt(
+                tileEntity.xCoord - TileEntityRendererDispatcher.staticPlayerX,
+                tileEntity.yCoord - TileEntityRendererDispatcher.staticPlayerY,
+                tileEntity.zCoord - TileEntityRendererDispatcher.staticPlayerZ)) {
+                return;
+            }
+        }
+        PendingTesrDraws.beforeTileEntity(tileEntity);
         try {
             final long start = Tracy.ENABLED ? System.nanoTime() : 0L;
             final boolean attribute = Tracy.ENABLED && TesrAttribution.currentRenderable == null;

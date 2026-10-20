@@ -1,7 +1,7 @@
 package com.gtnewhorizons.angelica.sdlgpu.glsm;
 
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
-import com.gtnewhorizons.angelica.glsm.states.PixelUnpackState;
+import com.gtnewhorizons.angelica.glsm.states.PixelStoreState;
 import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import com.gtnewhorizons.angelica.sdlgpu.SDLGPULWJGLService;
 import org.junit.jupiter.api.BeforeAll;
@@ -26,7 +26,6 @@ class GlsmSdlLWJGLServiceRoutingTest {
 
     @BeforeAll
     static void boot() {
-        GlsmSdlHeadlessRig.boot();
         svc = SDLGPULWJGLService.create();
     }
 
@@ -35,7 +34,7 @@ class GlsmSdlLWJGLServiceRoutingTest {
     }
 
     private static int glsmUnpackAlignment() {
-        final PixelUnpackState state = Reflect.get(glsmContext(), "pixelUnpackState");
+        final PixelStoreState state = Reflect.get(glsmContext(), "pixelUnpackState");
         return state.alignment();
     }
 

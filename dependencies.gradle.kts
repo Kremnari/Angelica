@@ -64,7 +64,7 @@ DependencyHandlerScope.of(dependencies).apply {
     runtimeOnlyNonPublishable("com.github.GTNewHorizons:BuildCraft:7.1.63:dev")
     runtimeOnlyNonPublishable("com.github.GTNewHorizons:Botania:1.13.32-GTNH:dev")
     runtimeOnlyNonPublishable("com.github.GTNewHorizons:LogisticsPipes:1.5.32-GTNH:dev")
-    runtimeOnlyNonPublishable("com.github.GTNewHorizons:OpenComputers:1.12.55-GTNH:dev")
+    runtimeOnlyNonPublishable("com.github.GTNewHorizons:OpenComputers:1.12.64-GTNH:dev")
     runtimeOnlyNonPublishable("com.github.GTNewHorizons:Mobs-Info:0.5.18-GTNH:dev")
     runtimeOnlyNonPublishable("com.github.GTNewHorizons:IguanaTweaksTConstruct:2.7.10:dev")
     runtimeOnlyNonPublishable("com.github.GTNewHorizons:OpenBlocks:1.12.18-GTNH:dev")
@@ -93,6 +93,9 @@ DependencyHandlerScope.of(dependencies).apply {
     shadowImplementation(project(":lwjgl3-backend")) { isTransitive = false }
     shadowImplementation(project(":sdl-gpu")) { isTransitive = false }
     runtimeOnlyNonPublishable(project(":tracy-client")) { isTransitive = false }
+    if (System.getProperty("os.name").lowercase().contains("mac")) {
+        runtimeOnlyNonPublishable(project(":moltenvk")) { isTransitive = false }
+    }
     devOnlyNonPublishable(libs.async.profiler)
     shadowImplementation(libs.eventbus)
 
@@ -201,7 +204,7 @@ afterEvaluate {
         testImplementation(libs.junit.platform.reporting)
         testImplementation(libs.junit.platform.launcher)
 
-        testImplementation(libs.archunit.junit5)
+        testImplementation(libs.retrofuturabootstrap) { isTransitive = false }
 
         glsmTestFixtures(testFixtures(project(":glsm")) as ModuleDependency) { isTransitive = false }
         testCompileOnly(testFixtures(project(":glsm")))

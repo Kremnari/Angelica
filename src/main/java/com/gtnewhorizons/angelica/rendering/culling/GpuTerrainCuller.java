@@ -28,7 +28,6 @@ import org.embeddedt.embeddium.impl.render.chunk.region.RenderRegion;
 import org.embeddedt.embeddium.impl.render.chunk.terrain.TerrainRenderPass;
 import org.embeddedt.embeddium.impl.render.viewport.CameraTransform;
 import org.joml.Matrix4f;
-import org.joml.Matrix4fc;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL40;
@@ -132,7 +131,6 @@ public final class GpuTerrainCuller {
 
     private ByteBuffer uboBytes;
     private Matrix4f mvp;
-    private Matrix4f mvNoTranslation;
     private int passOutputBase;
     private ChunkPrimitiveType walkPrimitiveType;
 
@@ -263,12 +261,14 @@ public final class GpuTerrainCuller {
         GLStateManager.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, visibleSsboGlId);
         GLStateManager.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, visibleStagingView);
 
+        culler.beginDispatches(visibleSsboGlId, indirectSsboGlId);
         BackendManager.RENDER_BACKEND.beginComputeDispatchBatch();
         try {
             dispatchPass(primaryPass);
             if (secondPrepared) dispatchPass(secondPass);
             if (translucentReady) dispatchPass(sortedPass);
         } finally {
+            culler.endDispatches();
             BackendManager.RENDER_BACKEND.endComputeDispatchBatch();
         }
     }
@@ -282,7 +282,7 @@ public final class GpuTerrainCuller {
         FrustumExtractor.patchControl(r.entryCount, r.indexPointerMask, frustumUboBytes);
         FrustumExtractor.patchBatchEntryBase(r.entryBase, frustumUboBytes);
         culler.uploadFrustum(frustumUboBytes);
-        culler.dispatch(visibleSsboGlId, indirectSsboGlId, r.entryCount);
+        culler.dispatch(r.entryCount);
         r.dispatched = true;
     }
 
@@ -399,17 +399,8 @@ public final class GpuTerrainCuller {
             uboBytes = FrustumExtractor.allocateUboByteBuffer();
         }
         final boolean shadow = ShadowRenderer.ACTIVE;
-        final Matrix4fc proj = matrices.projection();
-        final Matrix4fc mv = matrices.modelView();
         if (mvp == null) mvp = new Matrix4f();
-        if (mvNoTranslation == null) mvNoTranslation = new Matrix4f();
-        mvNoTranslation.set(mv).setTranslation(0f, 0f, 0f);
-        proj.mul(mvNoTranslation, mvp);
-        final float camX = (float) camera.intX + camera.fracX;
-        final float camY = (float) camera.intY + camera.fracY;
-        final float camZ = (float) camera.intZ + camera.fracZ;
-        FrustumExtractor.writeStd140(mvp, 0, 0, uboBytes);
-        FrustumExtractor.patchCameraWorld(camX, camY, camZ, uboBytes);
+        FrustumExtractor.writeFrustum(matrices.projection(), matrices.modelView(), camera, mvp, uboBytes);
         FrustumExtractor.patchBypassFrustum(shadow, uboBytes);
 
         frustumUboBytes = uboBytes;
@@ -459,7 +450,7 @@ public final class GpuTerrainCuller {
         }
 
         if (computeActiveThisPass) {
-            prepareFrustumUbo(matrices, camera);
+            if (!chained) prepareFrustumUbo(matrices, camera);
             syncSectionMetaIfDirty();
             walkPass(renderLists, AngelicaRenderPassConfiguration.TRANSLUCENT_PASS, occlusionCamera, useBlockFaceCulling);
 

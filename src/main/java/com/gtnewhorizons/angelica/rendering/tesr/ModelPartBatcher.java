@@ -14,8 +14,11 @@ import com.gtnewhorizons.angelica.glsm.StateSet;
 import com.gtnewhorizons.angelica.glsm.hooks.BatchStateGuard;
 import com.gtnewhorizons.angelica.glsm.ffp.CubeParams;
 import com.gtnewhorizons.angelica.glsm.ffp.InstancedAttribs;
+import com.gtnewhorizons.angelica.glsm.ffp.Instancing;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMConfig;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
+import com.gtnewhorizons.angelica.glsm.streaming.TessellatorEntityIds;
+import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
 import com.gtnewhorizons.angelica.glsm.states.AlphaState;
 import com.gtnewhorizons.angelica.glsm.states.BlendState;
 import com.gtnewhorizons.angelica.glsm.states.Color4;
@@ -101,6 +104,7 @@ public final class ModelPartBatcher {
     private boolean texCaptured;
     private boolean texIdentity;
     private boolean active;
+    private int entityFireDepth;
     private Mode mode = Mode.BLOCK_ENTITIES;
     private boolean instancedThisCycle;
     private DeferredWorldRenderingPipeline shaderPipeline;
@@ -139,6 +143,7 @@ public final class ModelPartBatcher {
     private static final class PartTemplate {
         TemplateBuffer template;
         CubeParams[] cubes;
+        boolean cubesInsideTexture;
         float scale;
         long lastUsedMs;
         boolean emptyVanillaPart;
@@ -155,14 +160,16 @@ public final class ModelPartBatcher {
         int glintSlot;
         int cull;
         boolean lit;
+        boolean lightmap;
         boolean afterGlint;
 
-        boolean matches(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean afterGlint) {
-            return this.texture == texture && this.material == material && pass.equals(this.pass) && this.offsetFactor == offsetFactor
-                && this.offsetUnits == offsetUnits && this.glintSlot == glintSlot && this.cull == cull && this.lit == lit && this.afterGlint == afterGlint;
+        boolean matches(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean lightmap, boolean afterGlint) {
+            return this.texture == texture && this.material == material && pass == this.pass && this.offsetFactor == offsetFactor
+                && this.offsetUnits == offsetUnits && this.glintSlot == glintSlot && this.cull == cull && this.lit == lit && this.lightmap == lightmap
+                && this.afterGlint == afterGlint;
         }
 
-        LayerKey set(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean afterGlint) {
+        LayerKey set(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean lightmap, boolean afterGlint) {
             this.texture = texture;
             this.material = material;
             this.pass = pass;
@@ -171,6 +178,7 @@ public final class ModelPartBatcher {
             this.glintSlot = glintSlot;
             this.cull = cull;
             this.lit = lit;
+            this.lightmap = lightmap;
             this.afterGlint = afterGlint;
             return this;
         }
@@ -179,20 +187,21 @@ public final class ModelPartBatcher {
         public boolean equals(Object o) {
             if (!(o instanceof LayerKey other)) return false;
             return Objects.equals(texture, other.texture) && Objects.equals(material, other.material)
-                && Objects.equals(pass, other.pass)
+                && pass == other.pass
                 && Float.floatToIntBits(offsetFactor) == Float.floatToIntBits(other.offsetFactor)
                 && Float.floatToIntBits(offsetUnits) == Float.floatToIntBits(other.offsetUnits)
-                && glintSlot == other.glintSlot && cull == other.cull && lit == other.lit && afterGlint == other.afterGlint;
+                && glintSlot == other.glintSlot && cull == other.cull && lit == other.lit && lightmap == other.lightmap && afterGlint == other.afterGlint;
         }
 
         @Override
         public int hashCode() {
-            int h = (Objects.hashCode(texture) * 31 + Objects.hashCode(material)) * 31 + Objects.hashCode(pass);
+            int h = (Objects.hashCode(texture) * 31 + Objects.hashCode(material)) * 31 + System.identityHashCode(pass);
             h = h * 31 + Float.floatToIntBits(offsetFactor);
             h = h * 31 + Float.floatToIntBits(offsetUnits);
             h = h * 31 + glintSlot;
             h = h * 31 + cull;
             h = h * 31 + (lit ? 1 : 0);
+            h = h * 31 + (lightmap ? 1 : 0);
             h = h * 31 + (afterGlint ? 1 : 0);
             return h;
         }
@@ -242,6 +251,8 @@ public final class ModelPartBatcher {
         if (entityPass && entityTranslucentsHeld) {
             discardHeldEntities();
         }
+        // Held entity translucents draw after deferred and can still sample regions released before them
+        if (!entityTranslucentsHeld) recycleAtlas();
         active = true;
         final long nowMs = System.currentTimeMillis();
         mvCaptured = false;
@@ -249,6 +260,8 @@ public final class ModelPartBatcher {
         activeGroups = shadow ? shadowGroups : entityPass ? entityGroups : groups;
         activeSource = entityPass ? entitySource : bufferSource;
         activeSource.setIdKind(mode == Mode.ENTITIES ? AngelicaBufferSource.GroupIdKind.ENTITY : AngelicaBufferSource.GroupIdKind.BLOCK_ENTITY);
+        activeSource.capturePassLighting();
+        BatchDrawDefaults.capturePassFramebuffer();
         activeGroups.beginPass(identity, 0, 0, 0, instancedThisCycle ? TesrBatchRenderer.INSTANCE.instancedRenderer : null, shaderPipeline);
         if (nowMs - lastSweepMs >= SWEEP_INTERVAL_MS) {
             lastSweepMs = nowMs;
@@ -342,6 +355,7 @@ public final class ModelPartBatcher {
                     if (instancedThisCycle) {
                         TesrBatchRenderer.INSTANCE.instancedRenderer.endFrame();
                     }
+                    recycleAtlas();
                     AngelicaBufferSource.rebindPass();
                 } finally {
                     if (wrap) GbufferPrograms.endEntities();
@@ -359,6 +373,15 @@ public final class ModelPartBatcher {
     private void discardHeldEntities() {
         entityTranslucentsHeld = false;
         entitySource.discard();
+        recycleAtlas();
+    }
+
+    private static void recycleAtlas() {
+        if (AngelicaConfig.enableEntityTextureAtlas) {
+            EntityTextureAtlas.INSTANCE.recycleReleasedRegions();
+        } else {
+            EntityTextureAtlas.INSTANCE.freePages();
+        }
     }
 
     public boolean isActive() {
@@ -439,8 +462,8 @@ public final class ModelPartBatcher {
         if (!canQueueGlint() || GLStateManager.getActiveTextureUnit() != 0 || !activeGroups.canCopyInstances(EntityMaterials.ITEM_GLINT) || !MatrixHelper.isIdentity(GLStateManager.getTextures().getTextureUnitMatrix(0))) return false;
         final boolean offset = GLStateManager.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
         final PolygonState polygon = GLStateManager.getPolygonState();
-        final int cullCode = EntityMaterials.ITEM_GLINT.isNoCull() ? DrawState.DISABLED : DrawState.liveCull();
-        final RenderLayer layer = layerFor(HeldItemGlint.texture(), EntityMaterials.ITEM_GLINT, PassOverride.NONE, offset ? polygon.getOffsetFactor() : 0, offset ? polygon.getOffsetUnits() : 0, ShaderGlint.NO_TINT, cullCode, false);
+        final int cullCode = DrawState.liveCull(EntityMaterials.ITEM_GLINT);
+        final RenderLayer layer = layerFor(HeldItemGlint.texture(), EntityMaterials.ITEM_GLINT, PassOverride.NONE, offset ? polygon.getOffsetFactor() : 0, offset ? polygon.getOffsetUnits() : 0, ShaderGlint.NO_TINT, cullCode, false, DrawState.liveLightmap());
         activeGroups.queueGlintLayers(template, layer, EntityMaterials.ITEM_GLINT, currentModelView(), GLSMConfig.packedLastBrightness(), VANILLA_GLINT_COLOR, currentOverlay(), currentEntityInfo(0),
             HeldItemGlint.firstMatrix(), HeldItemGlint.secondMatrix());
         parts++;
@@ -483,8 +506,8 @@ public final class ModelPartBatcher {
     private void setArmorGlint(ResourceLocation texture, int glintSlot, boolean lit, Matrix4f textureMatrix, int color) {
         final boolean offset = GLStateManager.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
         final PolygonState polygon = GLStateManager.getPolygonState();
-        final int cullCode = EntityMaterials.GLINT.isNoCull() ? DrawState.DISABLED : DrawState.liveCull();
-        armorGlintLayer = layerFor(texture, EntityMaterials.GLINT, PassOverride.NONE, offset ? polygon.getOffsetFactor() : 0, offset ? polygon.getOffsetUnits() : 0, glintSlot, cullCode, lit);
+        final int cullCode = DrawState.liveCull(EntityMaterials.GLINT);
+        armorGlintLayer = layerFor(texture, EntityMaterials.GLINT, PassOverride.NONE, offset ? polygon.getOffsetFactor() : 0, offset ? polygon.getOffsetUnits() : 0, glintSlot, cullCode, lit, DrawState.liveLightmap());
         armorGlintTexture.set(textureMatrix);
         armorGlintColor = color;
         armorGlintLight = GLSMConfig.packedLastBrightness();
@@ -506,7 +529,11 @@ public final class ModelPartBatcher {
     }
 
     public boolean entityPassActive() {
-        return active && mode == Mode.ENTITIES && !shadow;
+        return entitiesActive() && !shadow;
+    }
+
+    public boolean entitiesActive() {
+        return active && mode == Mode.ENTITIES;
     }
 
     public boolean isShadowPass() {
@@ -547,18 +574,18 @@ public final class ModelPartBatcher {
         if (shadow && isDepthEqualDecalState()) {
             return true;
         }
-        return queueTemplate(entry.template, entry.cubes, scale, null, false);
+        return queueTemplate(entry.template, entry.cubes, entry.cubesInsideTexture, scale, null, false);
     }
 
     public boolean queueTemplate(TemplateBuffer template, TesrMaterial material) {
-        return queueTemplate(template, null, 1.0f, material, false);
+        return queueTemplate(template, null, false, 1.0f, material, false);
     }
 
     public boolean queueTemplate(TemplateBuffer template, TesrMaterial material, boolean afterGlint) {
-        return queueTemplate(template, null, 1.0f, material, afterGlint);
+        return queueTemplate(template, null, false, 1.0f, material, afterGlint);
     }
 
-    private boolean queueTemplate(TemplateBuffer template, CubeParams[] cubes, float scale, TesrMaterial explicitMaterial, boolean afterGlint) {
+    private boolean queueTemplate(TemplateBuffer template, CubeParams[] cubes, boolean cubesInsideTexture, float scale, TesrMaterial explicitMaterial, boolean afterGlint) {
         if (!active) {
             bail(BailReason.INACTIVE);
             return false;
@@ -603,9 +630,10 @@ public final class ModelPartBatcher {
         final float offsetFactor = offset ? polygon.getOffsetFactor() : 0.0f;
         final float offsetUnits = offset ? polygon.getOffsetUnits() : 0.0f;
         final int glintSlot = material.special() == TesrMaterial.SpecialRender.GLINT ? lastBoundGlintSlot : ShaderGlint.NO_TINT;
-        final int cullCode = material.isNoCull() ? DrawState.DISABLED : DrawState.liveCull();
+        final int cullCode = DrawState.liveCull(material);
         final boolean lit = DrawState.liveLit(material);
-        final RenderLayer layer = layerFor(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, afterGlint);
+        final EntityTextureAtlas.Slot atlasSlot = texMatrix == null && cubesInsideTexture ? atlasSlotFor(material) : null;
+        final RenderLayer layer = layerFor(atlasSlot != null ? Objects.requireNonNull(atlasSlot.page).location : texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, DrawState.liveLightmap(), afterGlint);
         // Entities nested inside a TESR (mob spawner, OpenBlocks trophy) run in the block entity pass but carry an entity id
         final int entityId = groupId(shaderPipeline != null, mode == Mode.ENTITIES || pass.isEntityPhase(), CapturedRenderingState.INSTANCE.getCurrentRenderedEntity(), CapturedRenderingState.INSTANCE.getCurrentRenderedBlockEntity());
         final Color4 color = GLStateManager.getColor();
@@ -613,9 +641,71 @@ public final class ModelPartBatcher {
         final int overlayABGR = currentOverlay();
         final long entityInfo = currentEntityInfo(CapturedRenderingState.INSTANCE.getCurrentRenderedItem());
         final int packedLight = GLSMConfig.packedLastBrightness();
-        activeGroups.queue(template, cubes, scale, layer, material, currentModelView(), packedLight, colorABGR, overlayABGR, entityInfo, entityId, texMatrix);
+        activeGroups.queue(0L, template, cubes, scale, layer, material, currentModelView(), packedLight, colorABGR, overlayABGR, entityInfo, entityId, texMatrix, atlasSlot);
         parts++;
         return true;
+    }
+
+    private EntityTextureAtlas.Slot atlasSlotFor(TesrMaterial material) {
+        if (!AngelicaConfig.enableEntityTextureAtlas) return null;
+        // Glint, overlay and custom shaders sample their own textures
+        if (material.special() != TesrMaterial.SpecialRender.NONE || material.shader() != null || material.isUnfilteredAtlas() || material == EntityMaterials.OVERLAY) return null;
+        if (!activeGroups.instancesCubes(material)) return null;
+        if (shaderPipeline != null && !shaderPipeline.hasInstancedVariant(Instancing.CUBE)) return null;
+        return EntityTextureAtlas.INSTANCE.slotFor(lastBoundGlId, shaderPipeline != null);
+    }
+
+    private enum TessellatorRoute { DRAW_NOW, DRAW_NOW_EXPECTED, QUEUE }
+
+    public static int drawTessellator(Tessellator tess) {
+        switch (INSTANCE.routeTessellatorDraw(tess)) {
+            case QUEUE -> {
+                tess.isDrawing = false;
+                final int result = tess.rawBufferIndex * 4;
+                tess.reset();
+                return result;
+            }
+            case DRAW_NOW_EXPECTED -> {
+                BatchEligibility.beginExpectedDraws(GLStateManager.drawCalls);
+                try {
+                    return TessellatorStreamingDrawer.draw(tess);
+                } finally {
+                    BatchEligibility.endExpectedDraws(GLStateManager.drawCalls);
+                }
+            }
+            default -> {
+                return TessellatorStreamingDrawer.draw(tess);
+            }
+        }
+    }
+
+    public void beginEntityFire() { entityFireDepth++; }
+    public void endEntityFire() { entityFireDepth--; }
+
+    private TessellatorRoute routeTessellatorDraw(Tessellator tess) {
+        if (!active || !GLStateManager.isMainThread()) return TessellatorRoute.DRAW_NOW;
+        final boolean entityFire = entityFireDepth != 0 && mode == Mode.ENTITIES;
+        if (!entityFire && (mode != Mode.BLOCK_ENTITIES || !BatchEligibility.insideRenderer())) return TessellatorRoute.DRAW_NOW;
+        if (!tess.isDrawing || tess.drawMode != GL11.GL_QUADS || tess.vertexCount == 0 || (tess.vertexCount & 3) != 0) return TessellatorRoute.DRAW_NOW;
+        if (shaderPipeline != null && TessellatorEntityIds.hasIdChanges(tess)) return TessellatorRoute.DRAW_NOW;
+        if (DisplayListManager.isRecording() || !GLStateManager.glIsEnabled(GL11.GL_DEPTH_TEST) || !unitTexIdentity()) return TessellatorRoute.DRAW_NOW;
+        if (GLStateManager.getActiveProgram() != (shaderPipeline != null ? shaderPipeline.getActivePassProgramId() : 0)) return TessellatorRoute.DRAW_NOW;
+        final TesrMaterial material = EntityMaterials.fromCurrentState(true);
+        if (material == null || material == EntityMaterials.OVERLAY) return TessellatorRoute.DRAW_NOW;
+        if (lastBoundLocation == null || GLStateManager.getBoundTextureForServerState() != lastBoundGlId) return TessellatorRoute.DRAW_NOW;
+        if (!entityFire && !BatchEligibility.batchingAllowed()) return TessellatorRoute.DRAW_NOW_EXPECTED;
+
+        final PassOverride pass = shaderPipeline != null ? PassOverride.capture() : PassOverride.NONE;
+        final boolean offset = GLStateManager.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
+        final PolygonState polygon = GLStateManager.getPolygonState();
+        final int cullCode = DrawState.liveCull(material);
+        final RenderLayer layer = layerFor(lastBoundLocation, material, pass, offset ? polygon.getOffsetFactor() : 0.0f, offset ? polygon.getOffsetUnits() : 0.0f,
+            ShaderGlint.NO_TINT, cullCode, DrawState.liveLit(material), DrawState.liveLightmap());
+        // Flames carry entity_flame, which some packs may voxelize as a light source in the shadow pass
+        final int groupId = groupId(shaderPipeline != null, mode == Mode.ENTITIES || pass.isEntityPhase(), CapturedRenderingState.INSTANCE.getCurrentRenderedEntity(), CapturedRenderingState.INSTANCE.getCurrentRenderedBlockEntity());
+        TessellatorStreamingDrawer.fillMissingAttributes(tess);
+        activeGroups.streamVertices(layer, groupId, tess.rawBuffer, tess.vertexCount, currentModelView());
+        return TessellatorRoute.QUEUE;
     }
 
     private final ReferenceOpenHashSet<Class<?>> loggedMaterialBails = new ReferenceOpenHashSet<>();
@@ -669,6 +759,7 @@ public final class ModelPartBatcher {
         entry.scale = scale;
         entry.template = null;
         entry.cubes = null;
+        entry.cubesInsideTexture = false;
         entry.emptyVanillaPart = false;
         final List<ModelBox> boxes = part.cubeList;
         if (builder != null) {
@@ -703,26 +794,27 @@ public final class ModelPartBatcher {
             cubes[i] = params;
         }
         entry.cubes = cubes;
+        entry.cubesInsideTexture = CubeParams.allInsideTexture(cubes);
     }
 
-    private RenderLayer layerFor(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cullCode, boolean lit) {
-        return layerFor(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, false);
+    private RenderLayer layerFor(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cullCode, boolean lit, boolean lightmap) {
+        return layerFor(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, lightmap, false);
     }
 
-    private RenderLayer layerFor(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cullCode, boolean lit, boolean afterGlint) {
+    private RenderLayer layerFor(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cullCode, boolean lit, boolean lightmap, boolean afterGlint) {
         for (int i = 0; i < RECENT_LAYERS; i++) {
             final RenderLayer recent = recentLayers[i];
-            if (recent != null && recentKeys[i].matches(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, afterGlint)) {
+            if (recent != null && recentKeys[i].matches(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, lightmap, afterGlint)) {
                 return lastLayer = recent;
             }
         }
-        RenderLayer layer = layers.get(scratchKey.set(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, afterGlint));
+        RenderLayer layer = layers.get(scratchKey.set(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, lightmap, afterGlint));
         if (layer == null) {
-            layer = RenderLayer.tesr(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, afterGlint);
-            layers.put(new LayerKey().set(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, afterGlint), layer);
+            layer = RenderLayer.tesr(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, lightmap, afterGlint);
+            layers.put(new LayerKey().set(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, lightmap, afterGlint), layer);
         }
         if (recentKeys[recentNext] == null) recentKeys[recentNext] = new LayerKey();
-        recentKeys[recentNext].set(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, afterGlint);
+        recentKeys[recentNext].set(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cullCode, lit, lightmap, afterGlint);
         recentLayers[recentNext] = layer;
         recentNext = (recentNext + 1) % RECENT_LAYERS;
         return lastLayer = layer;
@@ -739,6 +831,7 @@ public final class ModelPartBatcher {
     }
 
     public void clear() {
+        entityFireDepth = 0;
         shadows.reset();
         groups.clear();
         entityGroups.clear();
@@ -754,7 +847,7 @@ public final class ModelPartBatcher {
         active = false;
         shaderPipeline = null;
         layers.clear();
-        scratchKey.set(null, null, null, 0.0f, 0.0f, ShaderGlint.NO_TINT, DrawState.DISABLED, false, false);
+        scratchKey.set(null, null, null, 0.0f, 0.0f, ShaderGlint.NO_TINT, DrawState.DISABLED, false, false, false);
         Arrays.fill(recentLayers, null);
         recentNext = 0;
         lastLayer = null;

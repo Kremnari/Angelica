@@ -48,6 +48,7 @@ public class RenderSystem {
     private static boolean supportsClearTexture;
     private static boolean supportsTesselation;
     private static boolean supportsSamplerObjects;
+    private static boolean supportsProgramBinary;
     private static int maxImageUnits;
     @Getter private static int maxCombinedTextureImageUnits;
     private static int maxSSBOBindings;
@@ -159,6 +160,9 @@ public class RenderSystem {
             maxCombinedTextureImageUnits = RENDER_BACKEND.getInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
         }
 
+        supportsProgramBinary = RENDER_BACKEND.supportsProgramBinary();
+        GLStateManager.LOGGER.info("Program Binary: {}", supportsProgramBinary);
+
         maxGlslVersion = Integer.parseInt(parseGlVersionString(RENDER_BACKEND.getString(GL20.GL_SHADING_LANGUAGE_VERSION)));
         supportsGpuShader4 = GLStateManager.capabilities.GL_EXT_gpu_shader4;
 
@@ -263,6 +267,7 @@ public class RenderSystem {
 
     public static void copyTexSubImage2D(int destTexture, int target, int i, int i1, int i2, int i3, int i4, int width, int height) {
         dsaState.copyTexSubImage2D(destTexture, target, i, i1, i2, i3, i4, width, height);
+        if (i == 0) TextureInfoCache.INSTANCE.onContentsChanged(destTexture);
     }
 
     public static void texParameteri(int texture, int target, int pname, int param) {
@@ -277,24 +282,28 @@ public class RenderSystem {
         GLStateManager.suspendPixelUnpackBuffer();
         dsaState.textureImage2D(texture, target, level, internalformat, width, height, border, format, type, pixels);
         GLStateManager.restorePixelUnpackBuffer();
+        TextureInfoCache.INSTANCE.onTextureImage2D(texture, target, level, internalformat, width, height);
     }
 
     public static void textureImage2D(int texture, int target, int level, int internalformat, int width, int height, int border, int format, int type, IntBuffer pixels) {
         GLStateManager.suspendPixelUnpackBuffer();
         dsaState.textureImage2D(texture, target, level, internalformat, width, height, border, format, type, pixels);
         GLStateManager.restorePixelUnpackBuffer();
+        TextureInfoCache.INSTANCE.onTextureImage2D(texture, target, level, internalformat, width, height);
     }
 
     public static void textureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, ByteBuffer pixels) {
         GLStateManager.suspendPixelUnpackBuffer();
         dsaState.textureSubImage2D(texture, target, level, xoffset, yoffset, width, height, format, type, pixels);
         GLStateManager.restorePixelUnpackBuffer();
+        if (level == 0) TextureInfoCache.INSTANCE.onContentsChanged(texture);
     }
 
     public static void textureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, IntBuffer pixels) {
         GLStateManager.suspendPixelUnpackBuffer();
         dsaState.textureSubImage2D(texture, target, level, xoffset, yoffset, width, height, format, type, pixels);
         GLStateManager.restorePixelUnpackBuffer();
+        if (level == 0) TextureInfoCache.INSTANCE.onContentsChanged(texture);
     }
 
     public static void texImage1D(int texture, int target, int level, int internalformat, int width, int border, int format, int type, ByteBuffer pixels) {
@@ -354,6 +363,7 @@ public class RenderSystem {
     }
 
     public static void framebufferTexture2D(int fb, int fbtarget, int attachment, int target, int texture, int levels) {
+        TextureInfoCache.INSTANCE.onWrittenOutsideUploads(texture);
         dsaState.framebufferTexture2D(fb, fbtarget, attachment, target, texture, levels);
     }
 
@@ -552,7 +562,7 @@ public class RenderSystem {
     }
 
     public static int getIndexedBufferBinding(int target, int index) {
-        return RENDER_BACKEND.getIndexedBufferBinding(target, index);
+        return GLStateManager.getIndexedBufferBinding(target, index);
     }
 
     public static void bindBufferBase(int target, int index, int buffer) {
@@ -586,18 +596,6 @@ public class RenderSystem {
         RENDER_BACKEND.clearTexImage(texture, level, format, type);
     }
 
-    public static void textureStorage1D(int texture, int target, int levels, int internalFormat, int width) {
-        dsaState.textureStorage1D(texture, target, levels, internalFormat, width);
-    }
-
-    public static void textureStorage2D(int texture, int target, int levels, int internalFormat, int width, int height) {
-        dsaState.textureStorage2D(texture, target, levels, internalFormat, width, height);
-    }
-
-    public static void textureStorage3D(int texture, int target, int levels, int internalFormat, int width, int height, int depth) {
-        dsaState.textureStorage3D(texture, target, levels, internalFormat, width, height, depth);
-    }
-
     public static int getMaxGlslVersion() {
         return maxGlslVersion;
     }
@@ -621,6 +619,10 @@ public class RenderSystem {
 
     public static boolean supportsSamplerObjects() {
         return supportsSamplerObjects;
+    }
+
+    public static boolean supportsProgramBinary() {
+        return supportsProgramBinary;
     }
 
     public static int genSampler() {
@@ -691,5 +693,13 @@ public class RenderSystem {
         if (!coreBitSet) return false;
         if (actualVersion < 0) return true;
         return actualVersion >= requestedMajor * 10 + requestedMinor;
+    }
+
+    public static final int MIN_CORE_VERSION = 33;
+
+    public static int probeCapAfterRejection(int requested, int actual) {
+        if (actual >= MIN_CORE_VERSION && actual < requested) return actual;
+        if (actual >= 0 && actual < MIN_CORE_VERSION && requested > MIN_CORE_VERSION) return MIN_CORE_VERSION;
+        return requested - 1;
     }
 }

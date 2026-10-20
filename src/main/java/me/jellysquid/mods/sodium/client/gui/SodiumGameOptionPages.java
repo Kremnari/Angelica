@@ -14,6 +14,7 @@ import net.minecraft.util.MathHelper;
 
 import com.cardinalstar.cubicchunks.api.compat.CubicChunksVideoSettings;
 import com.google.common.collect.ImmutableList;
+import com.gtnewhorizons.angelica.client.gui.AtlasPackScreen;
 import com.gtnewhorizons.angelica.compat.ModStatus;
 import com.gtnewhorizons.angelica.config.AngelicaConfig;
 import com.gtnewhorizons.angelica.rendering.FpsReducer;
@@ -23,6 +24,7 @@ import com.gtnewhorizons.angelica.config.GpuCullingMode;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import cpw.mods.fml.common.Optional.Method;
 import com.gtnewhorizons.angelica.glsm.streaming.StreamingUploader;
+import jss.notfine.config.NotFineConfig;
 import jss.notfine.core.Settings;
 import jss.notfine.core.SettingsManager;
 import me.flashyreese.mods.reeses_sodium_options.client.gui.ReeseSodiumVideoOptionsScreen;
@@ -31,6 +33,7 @@ import me.jellysquid.mods.sodium.client.gui.options.OptionGroup;
 import me.jellysquid.mods.sodium.client.gui.options.OptionImpact;
 import me.jellysquid.mods.sodium.client.gui.options.OptionImpl;
 import me.jellysquid.mods.sodium.client.gui.options.OptionPage;
+import me.jellysquid.mods.sodium.client.gui.options.SubScreenOption;
 import me.jellysquid.mods.sodium.client.gui.options.control.ControlValueFormatter;
 import me.jellysquid.mods.sodium.client.gui.options.control.CyclingControl;
 import me.jellysquid.mods.sodium.client.gui.options.control.SliderControl;
@@ -128,9 +131,6 @@ public class SodiumGameOptionPages {
                             // Resizing our window
                             if(Minecraft.getMinecraft().currentScreen instanceof ReeseSodiumVideoOptionsScreen oldGui) {
                                 Minecraft.getMinecraft().displayGuiScreen(new ReeseSodiumVideoOptionsScreen(oldGui.prevScreen));
-                            }
-                            else if(Minecraft.getMinecraft().currentScreen instanceof SodiumOptionsGUI oldGui) {
-                                Minecraft.getMinecraft().displayGuiScreen(new SodiumOptionsGUI(oldGui.prevScreen));
                             }
                         }, opts -> opts.guiScale)
                         .build())
@@ -558,6 +558,42 @@ public class SodiumGameOptionPages {
 
                 .build());
 
+        groups.add(OptionGroup.createBuilder()
+                .add(OptionImpl.createBuilder(boolean.class, angelicaOpts)
+                        .setName(I18n.format("options.angelica.parallelAtlasDecode"))
+                        .setTooltip(I18n.format("options.angelica.parallelAtlasDecode.tooltip"))
+                        .setControl(TickBoxControl::new)
+                        .setImpact(OptionImpact.LOW)
+                        .setBinding((opts, value) -> AngelicaConfig.enableParallelAtlasDecode = value, opts -> AngelicaConfig.enableParallelAtlasDecode)
+                        .setFlags(OptionFlag.REQUIRES_ASSET_RELOAD)
+                        .build())
+                .add(OptionImpl.createBuilder(boolean.class, angelicaOpts)
+                        .setName(I18n.format("options.angelica.parallelAtlasMipmaps"))
+                        .setTooltip(I18n.format("options.angelica.parallelAtlasMipmaps.tooltip"))
+                        .setControl(TickBoxControl::new)
+                        .setImpact(OptionImpact.LOW)
+                        .setBinding((opts, value) -> AngelicaConfig.enableParallelAtlasMipmaps = value, opts -> AngelicaConfig.enableParallelAtlasMipmaps)
+                        .setFlags(OptionFlag.REQUIRES_ASSET_RELOAD)
+                        .build())
+                .add(OptionImpl.createBuilder(boolean.class, angelicaOpts)
+                        .setName(I18n.format("options.angelica.batchedAtlasUpload"))
+                        .setTooltip(I18n.format("options.angelica.batchedAtlasUpload.tooltip"))
+                        .setControl(TickBoxControl::new)
+                        .setImpact(OptionImpact.LOW)
+                        .setBinding((opts, value) -> AngelicaConfig.enableBatchedAtlasUpload = value, opts -> AngelicaConfig.enableBatchedAtlasUpload)
+                        .setFlags(OptionFlag.REQUIRES_ASSET_RELOAD)
+                        .build())
+                .add(OptionImpl.createBuilder(int.class, angelicaOpts)
+                        .setName(I18n.format("options.angelica.workerThreads"))
+                        .setTooltip(I18n.format("options.angelica.workerThreads.tooltip"))
+                        .setControl(o -> new SliderControl(o, 0, 32, 1, ControlValueFormatter.quantityOrDisabled("sodium.options.threads.value", "sodium.options.default")))
+                        .setImpact(OptionImpact.MEDIUM)
+                        .setBinding((opts, value) -> AngelicaConfig.workerThreadCount = value, opts -> AngelicaConfig.workerThreadCount)
+                        .setFlags(OptionFlag.REQUIRES_GAME_RESTART)
+                        .build())
+                .add(new SubScreenOption(I18n.format("options.angelica.atlasPacks"), I18n.format("options.angelica.atlasPacks.tooltip"), AtlasPackScreen::new))
+                .build());
+
         if (Iris.enabled) {
             final OptionImpl<AngelicaConfig, Integer> shadowGraphAngleDelta =
                 OptionImpl.createBuilder(int.class, angelicaOpts)
@@ -774,6 +810,21 @@ public class SodiumGameOptionPages {
         groups.add(OptionGroup.createBuilder()
                 .add(Settings.MODE_GUI_BACKGROUND.option)
                 .add(Settings.GUI_BACKGROUND.option)
+                .add(OptionImpl.createBuilder(boolean.class, vanillaOpts)
+                        .setName(I18n.format("options.showCape"))
+                        .setTooltip(I18n.format("sodium.options.show_cape.tooltip"))
+                        .setControl(TickBoxControl::new)
+                        .setBinding((opts, value) -> opts.showCape = value, opts -> opts.showCape)
+                        .build())
+                .add(OptionImpl.createBuilder(boolean.class, vanillaOpts)
+                        .setName(I18n.format("options.anaglyph"))
+                        .setTooltip(I18n.format("sodium.options.anaglyph.tooltip"))
+                        .setControl(TickBoxControl::new)
+                        .setBinding((opts, value) -> opts.anaglyph = value, opts -> opts.anaglyph)
+                        .setImpact(OptionImpact.HIGH)
+                        .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
+                        .setEnabled(NotFineConfig.allowToggle3DAnaglyph)
+                        .build())
                 .add(OptionImpl.createBuilder(boolean.class, angelicaOpts)
                         .setName(I18n.format("options.angelica.disablef3"))
                         .setTooltip(I18n.format("options.angelica.disablef3.tooltip"))
@@ -792,6 +843,7 @@ public class SodiumGameOptionPages {
             groups.add(OptionGroup.createBuilder()
                 .add(Settings.ZOOM_SMOOTH.option)
                 .add(Settings.ZOOM_SMOOTH_SPEED.option)
+                .add(Settings.ZOOM_CINEMATIC.option)
                 .build());
         }
 

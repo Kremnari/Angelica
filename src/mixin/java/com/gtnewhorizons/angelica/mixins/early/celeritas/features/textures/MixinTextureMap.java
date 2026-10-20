@@ -3,17 +3,17 @@ package com.gtnewhorizons.angelica.mixins.early.celeritas.features.textures;
 import com.gtnewhorizons.angelica.mixins.interfaces.TextureMetadataExtension;
 import com.gtnewhorizons.angelica.rendering.celeritas.SpriteExtension;
 import com.gtnewhorizons.angelica.rendering.celeritas.TextureMapExtension;
+import com.gtnewhorizons.angelica.textures.atlas.AtlasAssembler;
 import com.google.common.collect.Lists;
+import com.gtnewhorizons.angelica.experimental.surround.Surround;
 import com.gtnewhorizons.angelica.utils.MipmapStrategies;
 import com.gtnewhorizons.angelica.utils.MipmapStrategy;
 import com.gtnewhorizons.angelica.utils.SpritePadding;
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
-import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.llamalad7.mixinextras.sugar.Local;
 import me.jellysquid.mods.sodium.client.gui.SodiumGameOptions;
 import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.IIconRegister;
 import net.minecraft.client.renderer.texture.Stitcher;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureMap;
@@ -32,6 +32,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -94,18 +95,18 @@ public class MixinTextureMap implements TextureMapExtension {
     /**
      * Brackets each block's icon registration so the sprites it registers can be attributed to it.
      */
-    @WrapOperation(
+    @Surround(
         method = "registerIcons",
         at = @At(
             value = "INVOKE",
             target = "Lnet/minecraft/block/Block;registerBlockIcons(Lnet/minecraft/client/renderer/texture/IIconRegister;)V"))
-    private void angelica$trackBlockIcons(Block block, IIconRegister reg, Operation<Void> original) {
+    private void angelica$trackBlockIcons(Block block) {
         MipmapStrategies.beginBlock(block);
-        try {
-            original.call(block, reg);
-        } finally {
-            MipmapStrategies.endBlock();
-        }
+    }
+
+    @Surround.Finally
+    private void angelica$trackBlockIconsEnd() {
+        MipmapStrategies.endBlock();
     }
 
     /**
@@ -140,8 +141,17 @@ public class MixinTextureMap implements TextureMapExtension {
             target = "Lnet/minecraft/client/renderer/texture/TextureUtil;uploadTextureMipmap([[IIIIIZZ)V"))
     private void angelica$uploadPaddedSprite(int[][] frameData, int width, int height, int originX, int originY,
         boolean blur, boolean clamp, @Local(ordinal = 0) TextureAtlasSprite sprite) {
-        SpritePadding.uploadPadded(frameData, width, height, originX, originY,
-            ((SpriteExtension) sprite).angelica$getGutterWidth(), blur, clamp);
+        final SpriteExtension ext = (SpriteExtension) sprite;
+        if (ext.angelica$takeUploaded()) return;
+        SpritePadding.uploadPadded(frameData, width, height, originX, originY, ext.angelica$getGutterWidth(), blur, clamp);
+    }
+
+    @ModifyExpressionValue(
+        method = "loadTextureAtlas",
+        at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/texture/Stitcher;getStichSlots()Ljava/util/List;"))
+    private List<TextureAtlasSprite> angelica$uploadAtlas(List<TextureAtlasSprite> sprites, @Local Stitcher stitcher) {
+        AtlasAssembler.upload(sprites, this.mipmapLevels, stitcher.getCurrentWidth(), stitcher.getCurrentHeight());
+        return sprites;
     }
 
     /**

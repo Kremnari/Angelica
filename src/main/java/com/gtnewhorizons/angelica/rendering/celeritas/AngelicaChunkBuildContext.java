@@ -36,7 +36,6 @@ import org.embeddedt.embeddium.impl.render.chunk.RenderPassConfiguration;
 import org.embeddedt.embeddium.impl.render.chunk.compile.ChunkBuildBuffers;
 import org.embeddedt.embeddium.impl.render.chunk.compile.ChunkBuildContext;
 import org.embeddedt.embeddium.impl.render.chunk.data.MinecraftBuiltRenderSectionData;
-import org.embeddedt.embeddium.impl.render.chunk.sprite.SpriteTransparencyLevel;
 import org.embeddedt.embeddium.impl.render.chunk.terrain.material.Material;
 import org.embeddedt.embeddium.impl.render.chunk.vertex.format.ChunkVertexEncoder;
 import org.embeddedt.embeddium.impl.util.QuadUtil;
@@ -62,6 +61,7 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
     @Getter private final FloatArrayList teBoundsScratch = new FloatArrayList();
     @Getter private final long[] deferredMask = new long[64];
     private final VertexArrayQuadView quadView;
+    private final QuadMaterialSelector materialSelector = new QuadMaterialSelector();
     private final boolean hasColoredLight;
     private final float[] tintResult = new float[3];
     private List<IDynamicLightSource> chunkLightSources;
@@ -76,8 +76,10 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
         super(renderPassConfiguration);
         this.textureAtlas = (TextureMapExtension) Minecraft.getMinecraft().getTextureMapBlocks();
         this.worldSlice = new WorldSlice(world);
-        this.smoothLightPipeline = new SmoothLightPipeline(lightDataCache, VanillaDiffuseProvider.INSTANCE, false);
-        this.flatLightPipeline = new FlatLightPipeline(lightDataCache, VanillaDiffuseProvider.INSTANCE, false);
+        // Shade by the quad normal so sloped quads blend the face shades instead of snapping to the dominant axis;
+        // axis-aligned quads come out the same either way
+        this.smoothLightPipeline = new SmoothLightPipeline(lightDataCache, VanillaDiffuseProvider.INSTANCE, true);
+        this.flatLightPipeline = new FlatLightPipeline(lightDataCache, VanillaDiffuseProvider.INSTANCE, true);
         this.quadView = new VertexArrayQuadView(vertices);
         this.hasColoredLight = quadLightData instanceof ExtQuadLightData;
     }
@@ -112,27 +114,6 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
             this.dynamicLightsInstance = null;
             this.chunkLightSources = null;
         }
-    }
-
-    private Material selectMaterial(Material material, TextureAtlasSprite sprite, boolean isShaderPackOverride,
-                                    boolean useRenderPassOptimization) {
-        // Don't apply transparency-based optimization when shader pack explicitly overrides the material
-        if (isShaderPackOverride) {
-            return material;
-        }
-
-        if (useRenderPassOptimization
-            && sprite != null && sprite.getClass() == TextureAtlasSprite.class && !sprite.hasAnimationMetadata()) {
-            final var transparencyLevel = ((SpriteExtension) sprite).celeritas$getTransparencyLevel();
-            if (transparencyLevel == SpriteTransparencyLevel.OPAQUE
-                && material == AngelicaRenderPassConfiguration.CUTOUT_MIPPED_MATERIAL) {
-                return AngelicaRenderPassConfiguration.SOLID_MATERIAL;
-            } else if (material == AngelicaRenderPassConfiguration.TRANSLUCENT_MATERIAL && transparencyLevel != SpriteTransparencyLevel.TRANSLUCENT) {
-                return AngelicaRenderPassConfiguration.CUTOUT_MIPPED_MATERIAL;
-            }
-        }
-
-        return material;
     }
 
     @SuppressWarnings("unchecked")
@@ -172,16 +153,14 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
         final short originalBlockId = blockRenderContext.blockId;
 
         int stateIdx = 0;
-        int facesAtBaseMaterial = 0;
-        boolean hasCachedMaterial = false;
-        TextureAtlasSprite lastSprite = null;
-        Material lastMaterial = null;
+        materialSelector.reset(material, isShaderPackOverride, useRenderPassOptimization);
         this.fluidQuadLightFace = null;
 
         for (int quadIdx = 0; quadIdx < numQuads; quadIdx++) {
             float uSum = 0, vSum = 0;
 
             int quadState = -1;
+            boolean hasVertexTransparency = false;
 
             for (int vIdx = 0; vIdx < 4; vIdx++) {
                 final var vertex = vertices[vIdx];
@@ -197,6 +176,7 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
                 vSum += v;
 
                 vertex.color = rawBuffer[ptr++];
+                hasVertexTransparency |= ColorABGR.unpackAlpha(vertex.color) != 255;
                 vertex.vanillaNormal = rawBuffer[ptr++];
                 vertex.light = rawBuffer[ptr++];
 
@@ -263,27 +243,12 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
             // Apply RGB block light tint from provider
             applyBlockLightTint(worldX, worldY, worldZ, vertices);
 
-            final int faceBit = 1 << facing.ordinal();
-            final Material correctMaterial;
-            if ((facesAtBaseMaterial & faceBit) != 0) {
-                correctMaterial = material;
-            } else {
-                if (hasCachedMaterial && sprite == lastSprite) {
-                    correctMaterial = lastMaterial;
-                } else {
-                    correctMaterial = selectMaterial(material, sprite, isShaderPackOverride, useRenderPassOptimization);
-                    lastSprite = sprite;
-                    lastMaterial = correctMaterial;
-                    hasCachedMaterial = true;
-                }
-                if (correctMaterial == material) {
-                    facesAtBaseMaterial |= faceBit;
-                }
-            }
+            final Material correctMaterial = materialSelector.select(facing, sprite, hasVertexTransparency);
             final var builder = buffers.get(correctMaterial);
 
             final int shaderOverrideBlockId = shaderOverrideBlockIds[quadIdx * 4];
-            blockRenderContext.blockId = shaderOverrideBlockId != -1 ? (short) shaderOverrideBlockId : originalBlockId;
+            blockRenderContext.blockId = shaderOverrideBlockId == StateAwareTessellator.UNMAPPED_SHADER_BLOCK_ID
+                ? -1 : shaderOverrideBlockId != -1 ? (short) shaderOverrideBlockId : originalBlockId;
 
             if (correctMaterial != material && builder.getEncoder() instanceof IrisExtendedChunkVertexEncoder iris) {
                 iris.setContext(blockRenderContext);

@@ -5,6 +5,8 @@ import com.gtnewhorizons.angelica.config.SystemProperties.UnmappedGLMode;
 import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
@@ -16,7 +18,6 @@ import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -32,19 +33,8 @@ class GLSMRedirectorTest {
 
     private static final String GLSM = GLSMRedirector.getTargetClassName();
 
-    @SuppressWarnings("unchecked")
-    private static Set<String> seenSet(String field) {
-        try {
-            final Field f = GLSMRedirector.class.getDeclaredField(field);
-            f.setAccessible(true);
-            return (Set<String>) f.get(null);
-        } catch (ReflectiveOperationException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static Set<String> unmappedSeen() { return seenSet("UNMAPPED_SEEN"); }
-    private static Set<String> debugSeen() { return seenSet("DEBUG_SEEN"); }
+    private static Set<String> unmappedSeen() { return Reflect.getStatic(GLSMRedirector.class, "UNMAPPED_SEEN"); }
+    private static Set<String> debugSeen() { return Reflect.getStatic(GLSMRedirector.class, "DEBUG_SEEN"); }
 
     @BeforeEach
     void reset() {
@@ -112,33 +102,24 @@ class GLSMRedirectorTest {
         return (Handle) dyn.bsmArgs[1];
     }
 
-    @Test
-    void invokeDynamicGL11HandleIsRedirected() {
-        final Handle impl = new Handle(Opcodes.H_INVOKESTATIC, "org/lwjgl/opengl/GL11", "glPopMatrix", "()V", false);
-        final ClassNode cn = makeClassWithInvokeDynamic(impl);
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "GL11, org/lwjgl/opengl/GL11, glPopMatrix, ()V, glPopMatrix",
+        "extension class with a renamed target, org/lwjgl/opengl/EXTBlendFuncSeparate, glBlendFuncSeparateEXT, (IIII)V, tryBlendFuncSeparate",
+        "GLxxC variant, org/lwjgl/opengl/GL11C, glDrawArrays, (III)V, glDrawArrays"
+    })
+    void invokeDynamicHandleIsRedirected(String name, String owner, String method, String desc, String expectedName) {
+        final ClassNode cn = makeClassWithInvokeDynamic(new Handle(Opcodes.H_INVOKESTATIC, owner, method, desc, false));
 
         final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
 
         assertTrue(changed);
         final Handle result = getResultHandle(cn);
         assertEquals(GLSM, result.getOwner());
-        assertEquals("glPopMatrix", result.getName());
-        assertEquals("()V", result.getDesc());
+        assertEquals(expectedName, result.getName());
+        assertEquals(desc, result.getDesc());
         assertEquals(Opcodes.H_INVOKESTATIC, result.getTag());
-    }
-
-    @Test
-    void invokeDynamicNamedClassHandleIsRedirected() {
-        final Handle impl = new Handle(Opcodes.H_INVOKESTATIC, "org/lwjgl/opengl/EXTBlendFuncSeparate", "glBlendFuncSeparateEXT", "(IIII)V", false);
-        final ClassNode cn = makeClassWithInvokeDynamic(impl);
-
-        final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
-
-        assertTrue(changed);
-        final Handle result = getResultHandle(cn);
-        assertEquals(GLSM, result.getOwner());
-        assertEquals("tryBlendFuncSeparate", result.getName());
-        assertEquals("(IIII)V", result.getDesc());
+        assertDoesNotThrow(() -> cn.accept(new ClassWriter(ClassWriter.COMPUTE_MAXS)));
     }
 
     @Test
@@ -176,20 +157,6 @@ class GLSMRedirectorTest {
         assertFalse(changed);
         assertEquals("org/lwjgl/opengl/ARBSparseTexture", firstCall(cn).owner);
         assertTrue(unmappedSeen().contains("org/lwjgl/opengl/ARBSparseTexture.glTexPageCommitmentARB()V"));
-    }
-
-    @Test
-    void debugLabelIsRedirectedNotReported() {
-        assertRedirected("org/lwjgl/opengl/KHRDebug", "glPushDebugGroup", "(IILjava/lang/CharSequence;)V", "glPushDebugGroup");
-        assertRedirected("org/lwjgl/opengl/GL43C", "glObjectLabel", "(IILjava/lang/CharSequence;)V", "glObjectLabel");
-        assertTrue(debugSeen().isEmpty());
-    }
-
-    @Test
-    void nonAwareDebugCallbackIsRedirectedNotPassedThrough() {
-        assertRedirected("org/lwjgl/opengl/GL43", "glDebugMessageCallback", "(Lorg/lwjgl/opengl/KHRDebugCallback;)V", "glDebugMessageCallback");
-        assertTrue(debugSeen().isEmpty());
-        assertTrue(unmappedSeen().isEmpty());
     }
 
     @Test
@@ -240,80 +207,14 @@ class GLSMRedirectorTest {
         assertTrue(unmappedSeen().isEmpty());
     }
 
-    @Test
-    void newlyMappedFramebufferAliasIsRedirected() {
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/EXTFramebufferObject", "glBindFramebufferEXT", "(II)V");
-
-        final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
-
-        assertTrue(changed);
-        assertEquals(GLSM, firstCall(cn).owner);
-        assertEquals("glBindFramebuffer", firstCall(cn).name);
-        assertTrue(unmappedSeen().isEmpty());
-    }
-
-    @Test
-    void newlyMappedReadPixelsIsRedirected() {
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL11", "glReadPixels", "(IIIIIILjava/nio/IntBuffer;)V");
-
-        final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
-
-        assertTrue(changed);
-        assertEquals(GLSM, firstCall(cn).owner);
-        assertEquals("glReadPixels", firstCall(cn).name);
-        assertTrue(unmappedSeen().isEmpty());
-    }
-
-    @Test
-    void pixelPackBufferReadbackOverloadsHaveDeclaredTargets() throws Exception {
-        assertRedirectedToDeclaredTarget(new String[][]{
-            {"org/lwjgl/opengl/GL11", "glReadPixels", "(IIIIIIJ)V"},
-            {"org/lwjgl/opengl/GL11C", "glReadPixels", "(IIIIIIJ)V"},
-            {"org/lwjgl/opengl/GL11", "glGetTexImage", "(IIIIJ)V"},
-        });
-    }
-
-    @Test
-    void newlyMappedOcclusionQueryAliasIsRedirected() {
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/ARBOcclusionQuery", "glGenQueriesARB", "(Ljava/nio/IntBuffer;)V");
-
-        final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
-
-        assertTrue(changed);
-        assertEquals(GLSM, firstCall(cn).owner);
-        assertEquals("glGenQueries", firstCall(cn).name);
-        assertTrue(unmappedSeen().isEmpty());
-    }
-
-    @Test
-    void utilCheckGLErrorIsRedirected() throws Exception {
-        assertRedirectedToDeclaredTarget(new String[][]{{"org/lwjgl/opengl/Util", "checkGLError", "()V"}});
-    }
-
-    @Test
-    void indexedGettersHaveRealTargets() throws Exception {
-        final Class<?> glsm = Class.forName(GLSM.replace('/', '.'), false, getClass().getClassLoader());
-        assertDoesNotThrow(() -> glsm.getDeclaredMethod("glGetInteger", int.class, int.class), "LWJGL2 GL30.glGetInteger(pname, index) redirects here");
-        assertDoesNotThrow(() -> glsm.getDeclaredMethod("glGetIntegeri", int.class, int.class), "LWJGL3 GL31C.glGetIntegeri(pname, index) redirects here");
-        assertDoesNotThrow(() -> glsm.getDeclaredMethod("glGetIntegeri_v", int.class, int.class, java.nio.IntBuffer.class));
-        assertDoesNotThrow(() -> glsm.getDeclaredMethod("glGetBooleani_v", int.class, int.class, java.nio.ByteBuffer.class));
-    }
-
-    @Test
-    void indexedGettersAreRedirected() {
-        assertRedirected("org/lwjgl/opengl/GL30", "glGetInteger", "(II)I", "glGetInteger");
-        assertRedirected("org/lwjgl/opengl/GL31C", "glGetIntegeri", "(II)I", "glGetIntegeri");
-        assertRedirected("org/lwjgl/opengl/GL30", "glGetIntegeri_v", "(IILjava/nio/IntBuffer;)V", "glGetIntegeri_v");
-        assertRedirected("org/lwjgl/opengl/GL30", "glGetBooleani_v", "(IILjava/nio/ByteBuffer;)V", "glGetBooleani_v");
-    }
-
-    private void assertRedirected(String owner, String name, String desc, String expectedName) {
+    private MethodInsnNode assertRedirected(String owner, String name, String desc, String expectedName) {
         final ClassNode cn = makeClassWithMethodCall(owner, name, desc);
         final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
         assertTrue(changed, owner + "." + name + " should redirect");
         assertEquals(GLSM, firstCall(cn).owner);
         assertEquals(expectedName, firstCall(cn).name);
         assertTrue(unmappedSeen().isEmpty(), owner + "." + name + " should not be recorded");
+        return firstCall(cn);
     }
 
     private static boolean glsmDeclares(String name, String desc) throws ClassNotFoundException {
@@ -326,80 +227,101 @@ class GLSMRedirectorTest {
         return false;
     }
 
-    private static void assertRedirectedToDeclaredTarget(String[][] cases) throws ClassNotFoundException {
+    @ParameterizedTest(name = "{0}.{1}{2}")
+    @CsvSource(delimiter = '|', value = {
+        "org/lwjgl/opengl/EXTFramebufferObject | glBindFramebufferEXT | (II)V | glBindFramebuffer",
+        "org/lwjgl/opengl/ARBFramebufferObject | glGenerateMipmap | (I)V | glGenerateMipmap",
+        "org/lwjgl/opengl/EXTFramebufferObject | glGenerateMipmapEXT | (I)V | glGenerateMipmap",
+        "org/lwjgl/opengl/GL11 | glReadPixels | (IIIIIILjava/nio/IntBuffer;)V | glReadPixels",
+        "org/lwjgl/opengl/ARBOcclusionQuery | glGenQueriesARB | (Ljava/nio/IntBuffer;)V | glGenQueries",
+        "org/lwjgl/opengl/KHRDebug | glPushDebugGroup | (IILjava/lang/CharSequence;)V | glPushDebugGroup",
+        "org/lwjgl/opengl/GL43C | glObjectLabel | (IILjava/lang/CharSequence;)V | glObjectLabel",
+        "org/lwjgl/opengl/GL43 | glDebugMessageCallback | (Lorg/lwjgl/opengl/KHRDebugCallback;)V | glDebugMessageCallback",
+        "org/lwjgl/opengl/KHRDebug | glDebugMessageCallback | (Lorg/lwjgl/opengl/KHRDebugCallback;)V | glDebugMessageCallback",
+        "org/lwjgl/opengl/GL32C | glFenceSync | (II)J | glFenceSync",
+        "org/lwjgl/opengl/GL32C | glDeleteSync | (J)V | glDeleteSync",
+        "org/lwjgl/opengl/GL15C | nglMapBuffer | (II)J | nglMapBuffer",
+        "org/lwjgl/opengl/GL33C | glQueryCounter | (II)V | glQueryCounter",
+        "org/lwjgl/opengl/GL33C | glGetQueryObjectui64 | (II)J | glGetQueryObjectui64",
+        "org/lwjgl/opengl/ARBTimerQuery | glGetQueryObjectui64 | (II)J | glGetQueryObjectui64",
+        "org/lwjgl/opengl/EXTTimerQuery | glGetQueryObjectuEXT | (II)J | glGetQueryObjectui64",
+        "org/lwjgl/opengl/EXTTimerQuery | glGetQueryObjectui64EXT | (II)J | glGetQueryObjectui64",
+        "org/lwjgl/opengl/GL30C | glBindFragDataLocation | (IILjava/lang/CharSequence;)V | glBindFragDataLocation",
+        "org/lwjgl/opengl/GL11C | glGetIntegerv | (I[I)V | glGetInteger",
+        "org/lwjgl/opengl/GL20C | glUniform4fv | (I[F)V | glUniform4",
+        "org/lwjgl/opengl/GL20C | glUniform4fv | (ILjava/nio/FloatBuffer;)V | glUniform4",
+        "org/lwjgl/opengl/EXTGpuShader4 | glVertexAttribIPointerEXT | (IIIIJ)V | glVertexAttribIPointer",
+        "org/lwjgl/opengl/EXTGPUShader4 | glVertexAttribIPointerEXT | (IIIIJ)V | glVertexAttribIPointer",
+        "org/lwjgl/opengl/ARBUniformBufferObject | glGetUniformBlockIndex | (ILjava/lang/CharSequence;)I | glGetUniformBlockIndex",
+        "org/lwjgl/opengl/GL30C | glBindBufferBase | (III)V | glBindBufferBase",
+        "org/lwjgl/opengl/GL31C | glUniformBlockBinding | (III)V | glUniformBlockBinding",
+        "org/lwjgl/opengl/GL32C | glDrawElementsBaseVertex | (IIIJI)V | glDrawElementsBaseVertex",
+        "org/lwjgl/opengl/GL43C | glMultiDrawElementsIndirect | (IIJII)V | glMultiDrawElementsIndirect",
+        "org/lwjgl/opengl/GL20C | glUniform1fv | (ILjava/nio/FloatBuffer;)V | glUniform1",
+        "org/lwjgl/opengl/GL11 | glLoadMatrixf | (Ljava/nio/FloatBuffer;)V | glLoadMatrix",
+        "org/lwjgl/opengl/ARBVertexArrayObject | glGenVertexArrays | ()I | glGenVertexArrays",
+        "org/lwjgl/opengl/APPLEVertexArrayObject | glGenVertexArraysAPPLE | ()I | glGenVertexArrays",
+    })
+    void aliasIsRedirected(String owner, String name, String desc, String expectedName) {
+        assertEquals(desc, assertRedirected(owner, name, desc, expectedName).desc);
+        assertTrue(debugSeen().isEmpty());
+    }
+
+    @ParameterizedTest(name = "{0}.{1}{2}")
+    @CsvSource(delimiter = '|', value = {
+        "org/lwjgl/opengl/GL11 | glPopMatrix | ()V",
+        "org/lwjgl/opengl/GL11 | glReadPixels | (IIIIIIJ)V",
+        "org/lwjgl/opengl/GL11C | glReadPixels | (IIIIIIJ)V",
+        "org/lwjgl/opengl/GL11 | glGetTexImage | (IIIIJ)V",
+        "org/lwjgl/opengl/Util | checkGLError | ()V",
+        "org/lwjgl/opengl/GL30 | glGetInteger | (II)I",
+        "org/lwjgl/opengl/GL31C | glGetIntegeri | (II)I",
+        "org/lwjgl/opengl/GL30 | glGetIntegeri_v | (IILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL30 | glGetBooleani_v | (IILjava/nio/ByteBuffer;)V",
+        "org/lwjgl/opengl/GL33 | glGenSamplers | ()I",
+        "org/lwjgl/opengl/GL33 | glGenSamplers | (Ljava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL33C | glGenSamplers | ([I)V",
+        "org/lwjgl/opengl/GL33 | glGenSamplers | ([I)V",
+        "org/lwjgl/opengl/GL33 | glDeleteSamplers | (I)V",
+        "org/lwjgl/opengl/GL33 | glDeleteSamplers | (Ljava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL33C | glDeleteSamplers | ([I)V",
+        "org/lwjgl/opengl/GL33 | glDeleteSamplers | ([I)V",
+        "org/lwjgl/opengl/GL44 | glBindSamplers | (IILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL44C | glBindSamplers | (ILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL44 | glBindSamplers | (I[I)V",
+        "org/lwjgl/opengl/ARBMultiBind | glBindSamplers | (IILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/ARBMultiBind | glBindSamplers | (ILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/ARBMultiBind | glBindSamplers | (I[I)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glGenSamplers | ()I",
+        "org/lwjgl/opengl/ARBSamplerObjects | glGenSamplers | (Ljava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glGenSamplers | ([I)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glDeleteSamplers | (I)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glDeleteSamplers | (Ljava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glDeleteSamplers | ([I)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glIsSampler | (I)Z",
+        "org/lwjgl/opengl/ARBSamplerObjects | glBindSampler | (II)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glSamplerParameteri | (III)V",
+        "org/lwjgl/opengl/ARBSamplerObjects | glSamplerParameterf | (IIF)V",
+        "org/lwjgl/opengl/GL43 | glGetDebugMessageLog | (ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/ByteBuffer;)I",
+    })
+    void redirectsToADeclaredGlsmTarget(String owner, String name, String desc) throws ClassNotFoundException {
         for (boolean aware : new boolean[]{false, true}) {
-            for (String[] c : cases) {
-                final String call = c[0] + "." + c[1] + c[2] + (aware ? " aware" : "");
-                final ClassNode cn = makeClassWithMethodCall(c[0], c[1], c[2]);
-                assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, aware), call);
-                final MethodInsnNode target = firstCall(cn);
-                assertEquals(GLSM, target.owner, call);
-                assertEquals(c[1], target.name, call);
-                assertEquals(c[2], target.desc, call);
-                assertTrue(glsmDeclares(target.name, target.desc), () -> "GLStateManager lacks the target of " + call);
-            }
+            final String call = owner + "." + name + desc + (aware ? " aware" : "");
+            final ClassNode cn = makeClassWithMethodCall(owner, name, desc);
+            assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, aware), call);
+            final MethodInsnNode target = firstCall(cn);
+            assertEquals(GLSM, target.owner, call);
+            assertEquals(name, target.name, call);
+            assertEquals(desc, target.desc, call);
+            assertTrue(glsmDeclares(target.name, target.desc), () -> "GLStateManager lacks the target of " + call);
         }
         assertTrue(unmappedSeen().isEmpty(), () -> "unexpected reports: " + unmappedSeen());
     }
 
     @Test
-    void samplerGenDeleteOverloadsHaveDeclaredTargets() throws Exception {
-        assertRedirectedToDeclaredTarget(new String[][]{
-            {"org/lwjgl/opengl/GL33", "glGenSamplers", "()I"},
-            {"org/lwjgl/opengl/GL33", "glGenSamplers", "(Ljava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/GL33C", "glGenSamplers", "([I)V"},
-            {"org/lwjgl/opengl/GL33", "glGenSamplers", "([I)V"},
-            {"org/lwjgl/opengl/GL33", "glDeleteSamplers", "(I)V"},
-            {"org/lwjgl/opengl/GL33", "glDeleteSamplers", "(Ljava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/GL33C", "glDeleteSamplers", "([I)V"},
-            {"org/lwjgl/opengl/GL33", "glDeleteSamplers", "([I)V"},
-        });
-    }
-
-    @Test
-    void bindSamplersHasDeclaredTargets() throws Exception {
-        assertRedirectedToDeclaredTarget(new String[][]{
-            {"org/lwjgl/opengl/GL44", "glBindSamplers", "(IILjava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/GL44C", "glBindSamplers", "(ILjava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/GL44", "glBindSamplers", "(I[I)V"},
-            {"org/lwjgl/opengl/ARBMultiBind", "glBindSamplers", "(IILjava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/ARBMultiBind", "glBindSamplers", "(ILjava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/ARBMultiBind", "glBindSamplers", "(I[I)V"},
-        });
-    }
-
-    @Test
-    void arbSamplerObjectsHasDeclaredTargets() throws Exception {
-        assertRedirectedToDeclaredTarget(new String[][]{
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glGenSamplers", "()I"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glGenSamplers", "(Ljava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glGenSamplers", "([I)V"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glDeleteSamplers", "(I)V"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glDeleteSamplers", "(Ljava/nio/IntBuffer;)V"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glDeleteSamplers", "([I)V"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glIsSampler", "(I)Z"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glBindSampler", "(II)V"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glSamplerParameteri", "(III)V"},
-            {"org/lwjgl/opengl/ARBSamplerObjects", "glSamplerParameterf", "(IIF)V"},
-        });
-    }
-
-    @Test
-    void descKeyedSyncRedirectsOnlyLongForm() {
-        assertRedirected("org/lwjgl/opengl/GL32C", "glFenceSync", "(II)J", "glFenceSync");
-        assertRedirected("org/lwjgl/opengl/GL32C", "glDeleteSync", "(J)V", "glDeleteSync");
-        assertRedirected("org/lwjgl/opengl/GL15C", "nglMapBuffer", "(II)J", "nglMapBuffer");
-
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL32", "glFenceSync", "(II)Lorg/lwjgl/opengl/GLSync;");
-        final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
-        assertFalse(changed);
-        assertEquals("org/lwjgl/opengl/GL32", firstCall(cn).owner);
-        assertTrue(unmappedSeen().isEmpty());
-    }
-
-    @Test
     void glSyncObjectFormsAreNotReported() {
         final String[][] cases = {
+            {"org/lwjgl/opengl/GL32", "glFenceSync", "(II)Lorg/lwjgl/opengl/GLSync;"},
             {"org/lwjgl/opengl/GL32", "glClientWaitSync", "(Lorg/lwjgl/opengl/GLSync;IJ)I"},
             {"org/lwjgl/opengl/ARBSync", "glWaitSync", "(Lorg/lwjgl/opengl/GLSync;IJ)V"},
             {"org/lwjgl/opengl/ARBSync", "glDeleteSync", "(Lorg/lwjgl/opengl/GLSync;)V"},
@@ -411,102 +333,39 @@ class GLSMRedirectorTest {
         assertTrue(unmappedSeen().isEmpty());
     }
 
-    @Test
-    void phase2NameKeyedGapsRedirect() {
-        assertRedirected("org/lwjgl/opengl/GL33C", "glQueryCounter", "(II)V", "glQueryCounter");
-        assertRedirected("org/lwjgl/opengl/GL33C", "glGetQueryObjectui64", "(II)J", "glGetQueryObjectui64");
-        assertRedirected("org/lwjgl/opengl/ARBTimerQuery", "glGetQueryObjectui64", "(II)J", "glGetQueryObjectui64");
-        assertRedirected("org/lwjgl/opengl/EXTTimerQuery", "glGetQueryObjectuEXT", "(II)J", "glGetQueryObjectui64");
-        assertRedirected("org/lwjgl/opengl/EXTTimerQuery", "glGetQueryObjectui64EXT", "(II)J", "glGetQueryObjectui64");
-        assertRedirected("org/lwjgl/opengl/GL30C", "glBindFragDataLocation", "(IILjava/lang/CharSequence;)V", "glBindFragDataLocation");
-        assertRedirected("org/lwjgl/opengl/GL11C", "glGetIntegerv", "(I[I)V", "glGetInteger");
-        assertRedirected("org/lwjgl/opengl/GL20C", "glUniform4fv", "(I[F)V", "glUniform4");
-        assertRedirected("org/lwjgl/opengl/GL20C", "glUniform4fv", "(ILjava/nio/FloatBuffer;)V", "glUniform4");
-    }
-
-    @Test
-    void phase1CeleritasGapsRedirect() {
-        assertRedirected("org/lwjgl/opengl/EXTGpuShader4", "glVertexAttribIPointerEXT", "(IIIIJ)V", "glVertexAttribIPointer");
-        assertRedirected("org/lwjgl/opengl/EXTGPUShader4", "glVertexAttribIPointerEXT", "(IIIIJ)V", "glVertexAttribIPointer");
-        assertRedirected("org/lwjgl/opengl/ARBUniformBufferObject", "glGetUniformBlockIndex", "(ILjava/lang/CharSequence;)I", "glGetUniformBlockIndex");
-        assertRedirected("org/lwjgl/opengl/GL30C", "glBindBufferBase", "(III)V", "glBindBufferBase");
-        assertRedirected("org/lwjgl/opengl/GL31C", "glUniformBlockBinding", "(III)V", "glUniformBlockBinding");
-        assertRedirected("org/lwjgl/opengl/GL32C", "glDrawElementsBaseVertex", "(IIIJI)V", "glDrawElementsBaseVertex");
-        assertRedirected("org/lwjgl/opengl/GL43C", "glMultiDrawElementsIndirect", "(IIJII)V", "glMultiDrawElementsIndirect");
-        assertRedirected("org/lwjgl/opengl/GL20C", "glUniform1fv", "(ILjava/nio/FloatBuffer;)V", "glUniform1");
-        assertRedirected("org/lwjgl/opengl/GL11", "glLoadMatrixf", "(Ljava/nio/FloatBuffer;)V", "glLoadMatrix");
-        assertRedirected("org/lwjgl/opengl/ARBVertexArrayObject", "glGenVertexArrays", "()I", "glGenVertexArrays");
-        assertRedirected("org/lwjgl/opengl/APPLEVertexArrayObject", "glGenVertexArraysAPPLE", "()I", "glGenVertexArrays");
-    }
-
-    @Test
-    void invokeDynamicGLCVariantIsRedirected() {
-        final Handle impl = new Handle(Opcodes.H_INVOKESTATIC, "org/lwjgl/opengl/GL11C", "glDrawArrays", "(III)V", false);
-        final ClassNode cn = makeClassWithInvokeDynamic(impl);
-
-        final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
-
-        assertTrue(changed);
-        final Handle result = getResultHandle(cn);
-        assertEquals(GLSM, result.getOwner());
-        assertEquals("glDrawArrays", result.getName());
-        assertEquals("(III)V", result.getDesc());
-    }
-
     private static final String AWARE_SHIM = "com/gtnewhorizons/angelica/sdlgpu/compat/AwareGLDebugShim";
     private static final String CALLBACK_I = "Lorg/lwjgl/opengl/GLDebugMessageCallbackI;";
 
-    @Test
-    void awareCallerStillHasPlainGlCallsRedirected() {
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL11", "glPopMatrix", "()V");
-
-        assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true));
-
-        assertEquals(GLSM, firstCall(cn).owner);
-        assertEquals("glPopMatrix", firstCall(cn).name);
-    }
-
-    @Test
-    void awareDebugMessageCallbackTargetsTheAwareShim() {
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL43", "glDebugMessageCallback", "(" + CALLBACK_I + "J)V");
+    @ParameterizedTest(name = "{0}.{1}{2}")
+    @CsvSource(delimiter = '|', value = {
+        "org/lwjgl/opengl/GL43 | glDebugMessageCallback | (Lorg/lwjgl/opengl/GLDebugMessageCallbackI;J)V",
+        "org/lwjgl/opengl/GLUtil | setupDebugMessageCallback | ()Lorg/lwjgl/system/Callback;",
+        "org/lwjgl/opengl/GLUtil | setupDebugMessageCallback | (Ljava/io/PrintStream;)Lorg/lwjgl/system/Callback;",
+    })
+    void awareDebugCallbackSetupTargetsTheAwareShim(String owner, String name, String desc) {
+        final ClassNode cn = makeClassWithMethodCall(owner, name, desc);
 
         assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true));
 
         assertEquals(AWARE_SHIM, firstCall(cn).owner, "GLStateManager cannot carry an org.lwjgl-typed descriptor for an aware caller");
-        assertEquals("glDebugMessageCallback", firstCall(cn).name);
+        assertEquals(name, firstCall(cn).name);
     }
 
-    @Test
-    void nonAwareDebugMessageCallbackTargetsGLStateManager() {
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/KHRDebug", "glDebugMessageCallback", "(Lorg/lwjgl/opengl/KHRDebugCallback;)V");
+    @ParameterizedTest(name = "{0}.{1}{2}")
+    @CsvSource(delimiter = '|', value = {
+        "org/lwjgl/opengl/GL | getCapabilities | ()Lorg/lwjgl/opengl/GLCapabilities;",
+        "org/lwjgl/opengl/GL | setCapabilities | (Lorg/lwjgl/opengl/GLCapabilities;)V",
+        "org/lwjgl/opengl/GL | getFunctionProvider | ()Lorg/lwjgl/system/FunctionProvider;",
+        "org/lwjgl/opengl/GLCapabilities | getAddressBuffer | ()Lorg/lwjgl/PointerBuffer;",
+        "org/lwjgl/opengl/GLDebugMessageCallback | create | (Lorg/lwjgl/opengl/GLDebugMessageCallbackI;)Lorg/lwjgl/opengl/GLDebugMessageCallback;",
+    })
+    void awareSafeLwjglTypedMembersAreNeitherRedirectedNorReported(String owner, String name, String desc) {
+        final ClassNode cn = makeClassWithMethodCall(owner, name, desc);
 
-        assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, false));
+        assertFalse(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true));
 
-        assertEquals(GLSM, firstCall(cn).owner);
-    }
-
-    @Test
-    void awareGLUtilSetupDebugMessageCallbackIsRedirected() {
-        for (String desc : new String[]{"()Lorg/lwjgl/system/Callback;", "(Ljava/io/PrintStream;)Lorg/lwjgl/system/Callback;"}) {
-            final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GLUtil", "setupDebugMessageCallback", desc);
-
-            assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true), desc);
-
-            assertEquals(AWARE_SHIM, firstCall(cn).owner, desc);
-        }
-    }
-
-    @Test
-    void getDebugMessageLogReachesGLStateManager() {
-        final String buffers = "Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/ByteBuffer;";
-        for (String desc : new String[]{"(I" + buffers + ")I"}) {
-            final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL43", "glGetDebugMessageLog", desc);
-
-            assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, false), desc);
-
-            assertEquals(GLSM, firstCall(cn).owner, desc);
-            assertEquals(desc, firstCall(cn).desc, "descriptor must be preserved so the right overload is hit");
-        }
+        assertEquals(owner, firstCall(cn).owner);
+        assertTrue(unmappedSeen().isEmpty(), () -> "must not be reported: " + unmappedSeen());
     }
 
     @Test
@@ -519,14 +378,6 @@ class GLSMRedirectorTest {
     }
 
     @Test
-    void awareUnroutableCallFailsFastWhenRequested() {
-        Reflect.setStaticFinal(SystemProperties.class, "UNMAPPED_GL", UnmappedGLMode.class, UnmappedGLMode.STRICT);
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL32C", "glSomethingExotic", "(" + CALLBACK_I + ")V");
-
-        assertThrows(IllegalStateException.class, () -> new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true));
-    }
-
-    @Test
     void nonAwareCallerNeverTargetsTheAwareShim() {
         final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL43", "glDebugMessageCallback", "(" + CALLBACK_I + "J)V");
 
@@ -535,39 +386,12 @@ class GLSMRedirectorTest {
         assertFalse(AWARE_SHIM.equals(firstCall(cn).owner));
     }
 
-    /** Crashed the game: it carries an LWJGL type but is only a ThreadLocal read plus a null check. */
-    @Test
-    void awareGetCapabilitiesIsNeitherRedirectedNorReported() {
-        final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL", "getCapabilities", "()Lorg/lwjgl/opengl/GLCapabilities;");
-
-        assertFalse(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true));
-
-        assertEquals("org/lwjgl/opengl/GL", firstCall(cn).owner);
-        assertTrue(unmappedSeen().isEmpty(), () -> "must not be reported: " + unmappedSeen());
-    }
-
     @Test
     void awareGetCapabilitiesDoesNotFailFastEvenInStrictMode() {
         Reflect.setStaticFinal(SystemProperties.class, "UNMAPPED_GL", UnmappedGLMode.class, UnmappedGLMode.STRICT);
         final ClassNode cn = makeClassWithMethodCall("org/lwjgl/opengl/GL", "getCapabilities", "()Lorg/lwjgl/opengl/GLCapabilities;");
 
         assertDoesNotThrow(() -> new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true));
-    }
-
-    @Test
-    void awareSafeLwjglTypedMembersAreNotReported() {
-        final String[][] safe = {
-            {"org/lwjgl/opengl/GL", "setCapabilities", "(Lorg/lwjgl/opengl/GLCapabilities;)V"},
-            {"org/lwjgl/opengl/GL", "getFunctionProvider", "()Lorg/lwjgl/system/FunctionProvider;"},
-            {"org/lwjgl/opengl/GLCapabilities", "getAddressBuffer", "()Lorg/lwjgl/PointerBuffer;"},
-            {"org/lwjgl/opengl/GLDebugMessageCallback", "create", "(Lorg/lwjgl/opengl/GLDebugMessageCallbackI;)Lorg/lwjgl/opengl/GLDebugMessageCallback;"},
-        };
-        for (String[] m : safe) {
-            unmappedSeen().clear();
-            final ClassNode cn = makeClassWithMethodCall(m[0], m[1], m[2]);
-            new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true);
-            assertTrue(unmappedSeen().isEmpty(), () -> m[0] + "." + m[1] + " must not be reported");
-        }
     }
 
     @Test
@@ -587,20 +411,5 @@ class GLSMRedirectorTest {
             final int attempt = i;
             assertThrows(IllegalStateException.class, () -> new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true), () -> "attempt " + attempt + " must still fail");
         }
-    }
-
-    @Test
-    void transformedClassProducesValidBytecode() {
-        final Handle impl = new Handle(Opcodes.H_INVOKESTATIC, "org/lwjgl/opengl/GL11", "glPopMatrix", "()V", false);
-        final ClassNode cn = makeClassWithInvokeDynamic(impl);
-
-        new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
-
-        final ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-        assertDoesNotThrow(() -> {
-            cn.accept(cw);
-            final byte[] bytes = cw.toByteArray();
-            assertTrue(bytes.length > 0);
-        });
     }
 }

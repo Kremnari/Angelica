@@ -1,25 +1,27 @@
 package com.gtnewhorizons.angelica.sdlgpu.pipeline;
 
+import com.gtnewhorizons.angelica.sdlgpu.RealDeviceExtension;
 import com.gtnewhorizons.angelica.sdlgpu.SdlTestRig;
 import com.gtnewhorizons.angelica.sdlgpu.resource.FboState;
-import com.gtnewhorizons.angelica.sdlgpu.resource.PixelOps;
 import com.gtnewhorizons.angelica.sdlgpu.shader.ShaderManager;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL30;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.lwjgl.sdl.SDLGPU.SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
 
+@ExtendWith(RealDeviceExtension.class)
+@Tag("sdl-gpu-device")
 class AttachmentClearTest {
 
     private static SdlTestRig rig;
     private static ShaderManager sm;
     private static PipelineStore store;
+    private static FullscreenPass fullscreen;
     private static AttachmentClear attachmentClear;
 
     private static final int SIZE = 32;
@@ -31,27 +33,20 @@ class AttachmentClearTest {
 
     @BeforeAll
     static void setUp() throws Exception {
-        rig = SdlTestRig.acquireRealDevice();
-        rig.resourceManager.cachePreferredDepthFormats();
+        rig = RealDeviceExtension.rig();
         sm = new ShaderManager(rig.device);
         store = new PipelineStore(rig.device);
-        attachmentClear = new AttachmentClear(rig.frameManager, store, sm);
+        fullscreen = new FullscreenPass(sm, rig.device);
+        attachmentClear = new AttachmentClear(rig.frameManager, store, fullscreen);
 
-        colorTexture = rig.resourceManager.createTexture(9700, GL11.GL_TEXTURE_2D, GL11.GL_RGBA8, SIZE, SIZE, 1, 1);
-        assertTrue(colorTexture != 0, "color target creation failed");
-        colorFormat = rig.resourceManager.getTextureMeta(9700).sdlFormat();
+        final RealDeviceExtension.Target color = RealDeviceExtension.colorTarget(9700, SIZE, SIZE);
+        colorTexture = color.texture();
+        colorFormat = color.sdlFormat();
         PipelineCache.setSwapchainFormats(new int[]{ colorFormat });
 
-        rig.resourceManager.createTexture(9701, GL11.GL_TEXTURE_2D, GL30.GL_DEPTH24_STENCIL8, SIZE, SIZE, 1, 1);
-        depthTexture = rig.resourceManager.ensureTextureUsage(9701, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
-        assertTrue(depthTexture != 0, "depth+stencil target creation failed");
-        depthFormat = rig.resourceManager.getTextureMeta(9701).sdlFormat();
-        assertTrue(PixelOps.isDepthStencilFormat(depthFormat), "test needs a packed depth+stencil format");
-    }
-
-    @AfterAll
-    static void tearDown() {
-        SdlTestRig.releaseRealDevice();
+        final RealDeviceExtension.Target depth = RealDeviceExtension.depthStencilTarget(9701, SIZE, SIZE);
+        depthTexture = depth.texture();
+        depthFormat = depth.sdlFormat();
     }
 
     private static FboState makeFbo() {
@@ -67,6 +62,14 @@ class AttachmentClearTest {
         fbo.height = SIZE;
         fbo.recomputeTargets();
         return fbo;
+    }
+
+    @AfterAll
+    static void tearDown() {
+        if (attachmentClear != null) attachmentClear.shutdown();
+        if (store != null) store.shutdown();
+        if (fullscreen != null) fullscreen.shutdown();
+        if (sm != null) sm.shutdown();
     }
 
     @Test

@@ -15,6 +15,7 @@ import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiVideoSettings;
 import net.minecraft.client.network.NetHandlerPlayClient;
+import net.minecraft.client.resources.IReloadableResourceManager;
 import net.minecraft.server.integrated.IntegratedServer;
 import net.minecraft.util.Direction;
 import net.minecraft.util.MathHelper;
@@ -37,15 +38,19 @@ import biomesoplenty.api.content.BOPCBlocks;
 import com.google.common.base.Objects;
 import com.gtnewhorizon.gtnhlib.client.model.loading.ModelRegistry;
 import com.gtnewhorizon.gtnhlib.client.renderer.vao.VAOManager;
+import com.gtnewhorizons.angelica.client.font.DarkModeUtils;
+import com.gtnewhorizons.angelica.client.font.FontProviderBitmap;
 import com.gtnewhorizons.angelica.commands.AngelicaCommand;
 import com.gtnewhorizons.angelica.AngelicaMod;
 import com.gtnewhorizons.angelica.common.BlockError;
+import com.gtnewhorizons.angelica.common.BlockIsbrhTest;
 import com.gtnewhorizons.angelica.compat.ModStatus;
 import com.gtnewhorizons.angelica.compat.bettercrashes.BetterCrashesCompat;
 import com.gtnewhorizons.angelica.compat.mojang.CompatMathHelper;
 import com.gtnewhorizons.angelica.config.AngelicaConfig;
 import com.gtnewhorizons.angelica.rendering.TileEntityRenderBoundsRegistry;
 import com.gtnewhorizons.angelica.rendering.tesr.AngelicaTesrMeshCache;
+import com.gtnewhorizons.angelica.rendering.tesr.EntityTextureAtlas;
 import com.gtnewhorizons.angelica.config.CompatConfig;
 import com.gtnewhorizons.angelica.config.ConfigMigrator;
 import com.gtnewhorizons.angelica.config.SystemProperties;
@@ -58,16 +63,21 @@ import com.gtnewhorizons.angelica.debug.TPSGraph;
 import com.gtnewhorizons.angelica.dynamiclights.DynamicLights;
 import com.gtnewhorizons.angelica.dynamiclights.config.EntityLightConfig;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
+import com.gtnewhorizons.angelica.glsm.backend.BackendStartGuard;
 import com.gtnewhorizons.angelica.glsm.backend.VSyncMode;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
+import com.gtnewhorizons.angelica.glsm.texture.TextureInfoCache;
 import com.gtnewhorizons.angelica.hudcaching.HUDCaching;
 import com.gtnewhorizons.angelica.iris.IrisGLSMBridge;
+import com.gtnewhorizons.angelica.iris.ShaderWarmup;
 import com.gtnewhorizons.angelica.mixins.interfaces.IGameSettingsExt;
 import com.gtnewhorizons.angelica.render.CloudRenderer;
 import com.gtnewhorizons.angelica.render.EmissiveTextureAutoloader;
 import com.gtnewhorizons.angelica.rendering.AngelicaBlockSafetyRegistry;
 import com.gtnewhorizons.angelica.rendering.FpsReducer;
 import com.gtnewhorizons.angelica.rendering.FramePacer;
+import com.gtnewhorizons.angelica.rendering.IsbrhTestRenderer;
 import com.gtnewhorizons.angelica.rendering.celeritas.CeleritasDebugScreenHandler;
 import com.gtnewhorizons.angelica.rendering.celeritas.CeleritasSetup;
 import com.gtnewhorizons.angelica.rendering.celeritas.CeleritasWorldRenderer;
@@ -77,9 +87,11 @@ import com.gtnewhorizons.angelica.rendering.celeritas.threading.ThreadedChunkTas
 import com.gtnewhorizons.angelica.rendering.items.BlockRenderListManager;
 import com.gtnewhorizons.angelica.rendering.items.ItemRenderListManager;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrLifecycle;
+import com.gtnewhorizons.angelica.utils.AngelicaJar;
 import com.gtnewhorizons.angelica.utils.AnimationMode;
 import com.gtnewhorizons.angelica.utils.ManagedEnum;
 import com.gtnewhorizons.angelica.zoom.Zoom;
+import cpw.mods.fml.client.registry.RenderingRegistry;
 import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.event.FMLPostInitializationEvent;
@@ -90,13 +102,10 @@ import cpw.mods.fml.common.gameevent.TickEvent;
 import cpw.mods.fml.common.registry.GameData;
 import cpw.mods.fml.relauncher.ReflectionHelper;
 import jss.notfine.core.Settings;
-import jss.notfine.gui.GuiCustomMenu;
-import jss.notfine.gui.NotFineGameOptionPages;
 import jss.notfine.gui.options.named.FOVMode;
 import me.flashyreese.mods.reeses_sodium_options.client.gui.ReeseSodiumVideoOptionsScreen;
 import me.jellysquid.mods.sodium.client.gui.FrameRateOptions;
 import me.jellysquid.mods.sodium.client.gui.SodiumGameOptions;
-import me.jellysquid.mods.sodium.client.gui.SodiumOptionsGUI;
 import net.coderbot.iris.Iris;
 import net.coderbot.iris.client.IrisDebugScreenHandler;
 
@@ -140,6 +149,11 @@ public final class ClientProxy extends CommonProxy {
         MinecraftForge.EVENT_BUS.register(new AngelicaTesrMeshCache.ReloadListener());
         ModelRegistry.registerModid(MOD_ID);
         blockError = new BlockError();
+        if (AngelicaConfig.enableTestBlocks) {
+            BlockIsbrhTest.renderId = RenderingRegistry.getNextAvailableRenderId();
+            RenderingRegistry.registerBlockHandler(BlockIsbrhTest.renderId, new IsbrhTestRenderer());
+        }
+        AngelicaJar.configureShaderDiskCache(event.getSourceFile());
         if (AngelicaConfig.enableIris) {
             IrisGLSMBridge.installImmediateExtendedHandler();
             Iris.warmupShaderTransforms();
@@ -154,6 +168,7 @@ public final class ClientProxy extends CommonProxy {
             HUDCaching.init();
         }
         CeleritasSetup.ensureInitialized();
+        DarkModeUtils.init();
         final SodiumGameOptions opts = options();
         if (opts.advanced.vsyncMode == null) {
             opts.advanced.vsyncMode = FrameRateOptions.defaultMode();
@@ -196,6 +211,9 @@ public final class ClientProxy extends CommonProxy {
             ItemRenderListManager.registerReloadListener();
             BlockRenderListManager.registerReloadListener();
         }
+        ((IReloadableResourceManager) mc.getResourceManager()).registerReloadListener(manager -> EntityTextureAtlas.INSTANCE.clear());
+        TextureInfoCache.INSTANCE.addDeleteListener(EntityTextureAtlas.INSTANCE::onTextureDeleted);
+        FontProviderBitmap.registerReloadListener();
 
         // Debug tooling
         if (SystemProperties.debugTooling() || Tracy.ENABLED) {
@@ -371,10 +389,12 @@ public final class ClientProxy extends CommonProxy {
 
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public void onGuiOpen(GuiOpenEvent event) {
+        if (BackendManager.RENDER_BACKEND.isSDLGPU()) BackendStartGuard.latch();
         if (!event.isCanceled()) {
             if (event.gui instanceof GuiMainMenu && gameStartTime == -1) {
                 gameStartTime = ManagementFactory.getRuntimeMXBean().getUptime() / 1000f;
                 LOGGER.info("The game loaded in {} seconds.", gameStartTime);
+                if (AngelicaConfig.enableIris) ShaderWarmup.start();
             }
 
             // force reset zoom when a GUI is opened
@@ -386,19 +406,7 @@ public final class ClientProxy extends CommonProxy {
     public void onGuiInit(GuiScreenEvent.InitGuiEvent.Pre event) {
         if (event.gui instanceof GuiVideoSettings eventGui) {
             event.setCanceled(true);
-            if (AngelicaConfig.enableNotFineOptions || GuiScreen.isShiftKeyDown()) {
-                Minecraft.getMinecraft().displayGuiScreen(new GuiCustomMenu(
-                        eventGui.parentGuiScreen,
-                        NotFineGameOptionPages.general(),
-                        NotFineGameOptionPages.detail(),
-                        NotFineGameOptionPages.atmosphere(),
-                        NotFineGameOptionPages.particles(),
-                        NotFineGameOptionPages.other()));
-            } else if (!AngelicaConfig.enableReesesSodiumOptions || GuiScreen.isCtrlKeyDown()) {
-                Minecraft.getMinecraft().displayGuiScreen(new SodiumOptionsGUI(eventGui.parentGuiScreen));
-            } else {
-                Minecraft.getMinecraft().displayGuiScreen(new ReeseSodiumVideoOptionsScreen(eventGui.parentGuiScreen));
-            }
+            Minecraft.getMinecraft().displayGuiScreen(new ReeseSodiumVideoOptionsScreen(eventGui.parentGuiScreen));
         }
     }
 

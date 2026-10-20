@@ -9,6 +9,7 @@ import org.lwjgl.opengl.GL11;
 
 import java.nio.FloatBuffer;
 
+import static com.gtnewhorizons.angelica.glsm.GlTestSupport.assertMatrixEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -64,12 +65,6 @@ class DisplayListCompilationParityTest {
         return buf;
     }
 
-    private static void assertMatrixEquals(FloatBuffer expected, FloatBuffer actual, String message) {
-        for (int i = 0; i < 16; i++) {
-            assertEquals(expected.get(i), actual.get(i), 0.001f, message + " (element " + i + ")");
-        }
-    }
-
     @BeforeEach
     void setup() {
         if (DisplayListManager.isRecording()) {
@@ -102,22 +97,6 @@ class DisplayListCompilationParityTest {
         GL11.glDisable(GL11.GL_CULL_FACE);
         GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
         GLStateManager.glLoadIdentity();
-    }
-
-    @ParameterizedTest
-    @EnumSource(Caller.class)
-    void compile_doesNotChangeState(Caller c) {
-        testList = GL11.glGenLists(1);
-        c.newList(testList, GL11.GL_COMPILE);
-        c.enable(GL11.GL_BLEND);
-
-        assertFalse(GL11.glIsEnabled(GL11.GL_BLEND), "During GL_COMPILE: state unchanged");
-
-        c.endList();
-        assertFalse(GL11.glIsEnabled(GL11.GL_BLEND), "After GL_COMPILE: state unchanged");
-
-        c.callList(testList);
-        assertTrue(GL11.glIsEnabled(GL11.GL_BLEND), "After playback: state changed");
     }
 
     @ParameterizedTest
@@ -191,6 +170,9 @@ class DisplayListCompilationParityTest {
         c.enable(GL11.GL_BLEND);
         c.enable(GL11.GL_DEPTH_TEST);
         c.enable(GL11.GL_CULL_FACE);
+
+        assertFalse(GL11.glIsEnabled(GL11.GL_BLEND), "During GL_COMPILE: BLEND unchanged");
+
         c.endList();
 
         assertFalse(GL11.glIsEnabled(GL11.GL_BLEND), "After GL_COMPILE: BLEND unchanged");

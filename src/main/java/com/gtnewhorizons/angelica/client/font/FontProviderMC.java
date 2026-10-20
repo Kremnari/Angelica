@@ -109,8 +109,8 @@ public final class FontProviderMC implements FontProvider {
     }
 
     @Override
-    public ResourceLocation getTexture(char chr) {
-        return locationFontTexture;
+    public int getTexture(char chr) {
+        return FontStrategist.getIntFromResourceLocation(locationFontTexture);
     }
 
     @Override

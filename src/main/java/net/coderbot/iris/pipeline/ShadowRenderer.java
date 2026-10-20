@@ -10,7 +10,10 @@ import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.profiling.RenderClassTimings;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
+import com.gtnewhorizons.angelica.rendering.tesr.PendingTesrDraws;
+import com.gtnewhorizons.angelica.rendering.tesr.SectionBuiltBlockEntity;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrBatchRenderer;
+import com.gtnewhorizons.angelica.rendering.tesr.TileEntityLight;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import com.gtnewhorizons.angelica.rendering.PlayerReflectionCapture;
 import com.gtnewhorizons.angelica.rendering.RenderingState;
@@ -53,6 +56,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.profiler.Profiler;
 import net.minecraft.tileentity.TileEntity;
+import net.minecraft.world.World;
 import org.embeddedt.embeddium.impl.render.viewport.Viewport;
 import org.embeddedt.embeddium.impl.render.viewport.ViewportProvider;
 import org.joml.Matrix4f;
@@ -769,7 +773,13 @@ public class ShadowRenderer {
                 }
             }
         }
-        int brightness = tile.getWorldObj().getLightBrightnessForSkyBlocks(tile.xCoord, tile.yCoord, tile.zCoord, 0);
+        if (tile instanceof SectionBuiltBlockEntity built && built.angelica$drawBuilt(
+            (double) tile.xCoord - cameraX, (double) tile.yCoord - cameraY, (double) tile.zCoord - cameraZ)) {
+            return;
+        }
+        final World world = tile.getWorldObj();
+        int brightness = TileEntityLight.packedLight(world, tile.xCoord, tile.yCoord, tile.zCoord, world.getLightBrightnessForSkyBlocks(tile.xCoord, tile.yCoord, tile.zCoord, 0));
+        PendingTesrDraws.beforeTileEntity(tile);
         GLStateManager.setLightmapTextureCoords(GL13.GL_TEXTURE1, (float) brightness % 65536, (float) brightness / 65536);
         GLStateManager.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
         TileEntityRendererDispatcher.instance.renderTileEntityAt(tile,
@@ -805,6 +815,7 @@ public class ShadowRenderer {
         GbufferPrograms.beginBlockEntities();
         GbufferPrograms.setBlockEntityDefaults();
         ModelPartBatcher.INSTANCE.begin(ModelPartBatcher.Mode.BLOCK_ENTITIES, true);
+        PendingTesrDraws.beginPass();
 
 		for (int b = 0, bn = visibleTileEntities.size(); b < bn; b++) {
 			final List<TileEntity> bucket = visibleTileEntities.get(b);
@@ -837,6 +848,7 @@ public class ShadowRenderer {
 			}
 		}
 
+        PendingTesrDraws.endPass();
         flushShadowModelParts();
         TesrBatchRenderer.INSTANCE.flush();
 

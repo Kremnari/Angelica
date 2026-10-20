@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.glsm;
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMInitConfig;
+import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -14,18 +15,20 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.PixelFormat;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.extension.ExtensionContext.Namespace.GLOBAL;
 
 /**
  * 3.3 core forward-compatible context. FFP emulation stays enabled, so per-test isolation only deactivates it.
  */
-public class GLSMCoreExtension implements BeforeAllCallback, BeforeEachCallback, ExtensionContext.Store.CloseableResource {
+public class GLSMCoreExtension implements BeforeAllCallback, BeforeEachCallback, AfterEachCallback, ExtensionContext.Store.CloseableResource {
 
     private static boolean started = false;
     private static Throwable startFailure;
 
     @Override
     public void beforeAll(ExtensionContext context) throws LWJGLException {
+        GlsmRedirectAgent.requireInstalled();
         if (startFailure != null) {
             throw new IllegalStateException("GLSMCoreExtension context setup failed earlier in this JVM", startFailure);
         }
@@ -73,6 +76,14 @@ public class GLSMCoreExtension implements BeforeAllCallback, BeforeEachCallback,
         if (ffp.isActive()) {
             ffp.deactivate();
         }
+    }
+
+    @Override
+    public void afterEach(ExtensionContext context) {
+        final int error = GL11.glGetError();
+        while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
+        GlsmRedirectAgent.assertNoFailures();
+        assertEquals(GL11.GL_NO_ERROR, error, () -> "GL Error: 0x" + Integer.toHexString(error));
     }
 
     @Override

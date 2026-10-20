@@ -25,13 +25,35 @@ public class AngelicaConfig {
     @Config.RequiresWorldRestart
     public static int chunkBuilderThreadCount;
 
-    @Config.Comment("Enable NotFine Options")
-    @Config.DefaultBoolean(false)
-    public static boolean enableNotFineOptions;
-
-    @Config.Comment("Enable Reese's Sodium Options")
+    @Config.Comment("Decode block and item textures on multiple threads for faster startup. Disable if you notice missing or broken textures.")
     @Config.DefaultBoolean(true)
-    public static boolean enableReesesSodiumOptions;
+    public static boolean enableParallelAtlasDecode;
+
+    @Config.Comment("Generate texture mipmaps on multiple threads for faster startup. Disable if you notice broken mipmaps.")
+    @Config.DefaultBoolean(true)
+    public static boolean enableParallelAtlasMipmaps;
+
+    @Config.Comment("Upload the block and item texture atlas in large batches instead of one texture at a time. Disable if you notice missing or broken textures.")
+    @Config.DefaultBoolean(true)
+    public static boolean enableBatchedAtlasUpload;
+
+    @Config.Comment("Resource pack classes the player allows to be read on worker threads during texture loading.")
+    @Config.DefaultStringList({})
+    public static String[] atlasTrustedPacks;
+
+    @Config.Comment("Built-in trusted resource pack classes the player has turned off.")
+    @Config.DefaultStringList({})
+    public static String[] atlasDistrustedPacks;
+
+    @Config.Comment("Resource pack classes seen during texture loading that are not trusted. Recorded automatically; trust them from Video Settings > Performance.")
+    @Config.DefaultStringList({})
+    public static String[] atlasObservedPacks;
+
+    @Config.Comment("Worker threads for startup and shader loading work. 0 = automatic.")
+    @Config.DefaultInt(0)
+    @Config.RangeInt(min = 0, max = 32)
+    @Config.RequiresMcRestart
+    public static int workerThreadCount;
 
     @Config.Comment("Inject BakedModel rendering into some vanilla blocks")
     @Config.DefaultBoolean(false)
@@ -98,7 +120,7 @@ public class AngelicaConfig {
     @Config.DefaultBoolean(true)
     public static boolean showSplashMemoryBar;
 
-    @Config.Comment("Renders the HUD elements once per 20 frames (by default) and reuses the pixels to improve performance. [Experimental]")
+    @Config.Comment("Renders the HUD elements once per 20 frames (by default) and reuses the pixels to improve performance. [Semi-stable]")
     @Config.DefaultBoolean(true)
     @Config.RequiresMcRestart
     public static boolean enableHudCaching;
@@ -107,7 +129,7 @@ public class AngelicaConfig {
     @Config.RequiresMcRestart
     public static boolean enableHudCachingEventTransformer;
 
-    @Config.Comment("Enable HUD Caching at runtime. Requires enableHudCaching to be on at startup. [Experimental]")
+    @Config.Comment("Enable HUD Caching at runtime. Requires enableHudCaching to be on at startup. [Semi-stable]")
     @Config.DefaultBoolean(false)
     public static boolean hudCachingActive;
 
@@ -141,15 +163,14 @@ public class AngelicaConfig {
     @Config.RequiresMcRestart
     public static boolean enableCubeInstancing;
 
+    @Config.Comment("Stitch a texture atlas between entity and block entity models so different textures draw together (requires cube instancing)")
+    @Config.DefaultBoolean(true)
+    public static boolean enableEntityTextureAtlas;
+
     @Config.Comment("Skip the end-of-frame shader buffer copy by ping-ponging buffers. Disable if a shader pack misrenders.")
     @Config.DefaultBoolean(true)
     @Config.RequiresMcRestart
     public static boolean shaderParityFlip;
-
-    @Config.Comment("Skip the end-of-frame glFlush before the buffer swap [Experimental]")
-    @Config.DefaultBoolean(false)
-    @Config.RequiresMcRestart
-    public static boolean skipEndOfFrameFlush;
 
     @Config.Comment("Cache the vanilla skull mesh per skull type/player skin and batch skull draws")
     @Config.DefaultBoolean(true)
@@ -409,6 +430,11 @@ public class AngelicaConfig {
         @Config.DefaultBoolean(true)
         @Config.RequiresMcRestart
         public boolean narrowLegendsMod;
+
+        @Config.Comment("Narrow Power Converters transformer exclusions to allow GL redirection")
+        @Config.DefaultBoolean(true)
+        @Config.RequiresMcRestart
+        public boolean narrowPowerConverters;
     }
 
     @Config.Comment("Renders chunks before neighbors are ready. Improves loading at render distance edges, useful for low render distance servers.")
@@ -437,6 +463,22 @@ public class AngelicaConfig {
     @Config.DefaultBoolean(false)
     @Config.RequiresMcRestart
     public static boolean disableGLVersionPinning;
+
+    @Config.Comment("Requested OpenGL context version as an integer (e.g. 46, 41, 33). 0 = highest available. Falls back to probing when the version cannot be created.")
+    @Config.DefaultInt(0)
+    @Config.RangeInt(min = 0, max = 46)
+    @Config.RequiresMcRestart
+    public static int glVersion;
+
+    @Config.Comment("Render backend: OPENGL, or SDL_GPU (experimental; Vulkan/Metal/Direct3D 12 through SDL3, falls back to OpenGL when no device can be created). -Dangelica.sdlgpu.enable=true|false overrides this.")
+    @Config.DefaultEnum("OPENGL")
+    @Config.RequiresMcRestart
+    public static RenderBackendChoice renderBackend;
+
+    @Config.Comment("SDL GPU driver: AUTO, VULKAN, METAL (macOS), D3D12 (Windows). Vulkan on macOS needs MoltenVK and uses Metal without it. -Dangelica.sdlgpu.driver overrides this.")
+    @Config.DefaultEnum("AUTO")
+    @Config.RequiresMcRestart
+    public static SdlGpuDriver sdlGpuDriver;
 
     @Config.Comment("Disables GL Error checks. Always set to false in dev env or if LWJGL debug is on. Improves performance.")
     @Config.DefaultBoolean(true)
@@ -504,6 +546,14 @@ public class AngelicaConfig {
 
     public static boolean cubeInstancingEnabled() {
         return enableEntityBatching && enableCubeInstancing;
+    }
+
+    public static boolean sdlGpuConfigured() {
+        return renderBackend == RenderBackendChoice.SDL_GPU;
+    }
+
+    public static String sdlGpuDriverName() {
+        return sdlGpuDriver == null ? "" : sdlGpuDriver.sdlName();
     }
 
     public static GLProfile getEffectiveGlProfile() {

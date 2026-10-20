@@ -1,10 +1,13 @@
 package com.gtnewhorizons.angelica.sdlgpu.pipeline;
 
 import com.gtnewhorizons.angelica.sdlgpu.frame.ContextState;
+import com.gtnewhorizons.angelica.sdlgpu.device.Device;
 import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import com.gtnewhorizons.angelica.sdlgpu.shader.ShaderManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.spvc.Spvc;
@@ -24,17 +27,43 @@ import static org.lwjgl.sdl.SDLGPU.SDL_GPU_VERTEXINPUTRATE_INSTANCE;
 import static org.lwjgl.sdl.SDLGPU.SDL_GPU_VERTEXINPUTRATE_VERTEX;
 
 class PipelineCacheVertexInputTest {
-    private static final int PLACEHOLDER_PITCH = 16;
+    private static final int PLACEHOLDER_PITCH = 0;
 
     private PipelineStore store;
 
     @BeforeEach
     void setUp() {
         PipelineCache.setSwapchainFormats(new int[]{SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM});
-        store = new PipelineStore(null);
+        store = new PipelineStore(device("vulkan"));
+    }
+
+    private static Device device(String driverName) {
+        final Device device = new Device();
+        Reflect.set(device, "driverName", driverName);
+        return device;
     }
 
     private static int nextTestSetId = 1;
+
+    /** Shader input vec size per location; 0 leaves the location unused. */
+    private static int[] vecSizes(int... byLocation) {
+        final int[] out = new int[ContextState.MAX_VERTEX_ATTRIBS];
+        System.arraycopy(byLocation, 0, out, 0, byLocation.length);
+        return out;
+    }
+
+    private static int[] fp32(int[] vecSizes) {
+        final int[] out = new int[ContextState.MAX_VERTEX_ATTRIBS];
+        for (int i = 0; i < out.length; i++) {
+            if (vecSizes[i] != 0) out[i] = Spvc.SPVC_BASETYPE_FP32;
+        }
+        return out;
+    }
+
+    private static PipelineCache fp32Cache(int shaderInputMask, int... vecSizesByLocation) {
+        final int[] vecSizes = vecSizes(vecSizesByLocation);
+        return cache(shaderInputMask, vecSizes, fp32(vecSizes));
+    }
 
     private static PipelineCache cache(int shaderInputMask, int[] vecSizes, int[] baseTypes) {
         return cache(nextTestSetId++, shaderInputMask, vecSizes, baseTypes);
@@ -88,11 +117,7 @@ class PipelineCacheVertexInputTest {
     }
 
     private static PipelineCache coercionCache(String name) {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(1, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(1, 4);
         final String[] names = new String[ContextState.MAX_VERTEX_ATTRIBS];
         names[0] = name;
         c.shaderInputName = names;
@@ -172,11 +197,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void sparseLayout_locations0and2_buildsDenseBindingArray() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[2] = 2;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[2] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x5, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x5, 3, 0, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 20);
@@ -228,12 +249,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void correctedDhGenericLayout_buildsSuccessfully() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32;
-        baseTypes[1] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);
@@ -246,11 +262,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void denseLayout_locations0_1_2_noPlaceholders() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4; vecSizes[2] = 2;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[1] = Spvc.SPVC_BASETYPE_FP32; baseTypes[2] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x7, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x7, 3, 4, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 24);
@@ -269,12 +281,8 @@ class PipelineCacheVertexInputTest {
     }
 
     @Test
-    void shaderExpectsButVaoMissing_emitsInstanceExpansion() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[1] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+    void shaderExpectsButVaoMissing_emitsConstantBinding() {
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);
@@ -293,12 +301,24 @@ class PipelineCacheVertexInputTest {
     }
 
     @Test
+    void constantBindingUsesZeroPitchExceptOnMetal() {
+        final PipelineCache c = fp32Cache(1 << 4, 0, 0, 0, 0, 3);
+        final ContextState cs = new ContextState();
+
+        for (String driver : new String[] { "vulkan", "metal", "direct3d12" }) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                final PipelineCache.VertexInputResult r = c.buildVertexInput(new PipelineStore(device(driver)), cs, stack);
+                assertNotNull(r);
+                final int expectedPitch = driver.equals("metal") ? 16 : 0;
+                assertEquals(expectedPitch, r.bindings().get(4).pitch(), driver + " current normal");
+                assertEquals(expectedPitch, r.bindings().get(0).pitch(), driver + " unused slot");
+            }
+        }
+    }
+
+    @Test
     void vaoExtraAttribNotInShader_droppedFromPipeline() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 4; vecSizes[2] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[2] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x5, vecSizes, baseTypes); // shaderInputMask = 0x5
+        final PipelineCache c = fp32Cache(0x5, 4, 0, 4); // shaderInputMask = 0x5
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 24);
@@ -332,11 +352,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void interiorGapWithoutExpansion_fillsGapWithPlaceholder() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[3] = 2;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[3] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x9, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x9, 3, 0, 0, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 20);
@@ -366,11 +382,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void enabledAttribWithoutPointer_treatedAsDisabled() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4; vecSizes[3] = 2;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[1] = Spvc.SPVC_BASETYPE_FP32; baseTypes[3] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0xB, vecSizes, baseTypes); // locs 0, 1, 3
+        final PipelineCache c = fp32Cache(0xB, 3, 4, 0, 2); // locs 0, 1, 3
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 16);
@@ -419,11 +431,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void enabledAttribWithDeadBuffer_demotedToConstantExpansion() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[1] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
         store.setBufferHandleResolver(id -> id == 42 ? 0xBEEFL : 0L);
 
         final ContextState cs = new ContextState();
@@ -445,11 +453,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void pipelineKeyDiffersBetweenDeadAndLiveBinding() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[1] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 16);
@@ -478,10 +482,8 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void vertexInputSetIdChangeInvalidatesInputHash() {
-        final int[] vecSizesA = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizesA[0] = 3;
-        final int[] baseTypesA = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypesA[0] = Spvc.SPVC_BASETYPE_FP32;
+        final int[] vecSizesA = vecSizes(3);
+        final int[] baseTypesA = fp32(vecSizesA);
         final String[] namesA = new String[ContextState.MAX_VERTEX_ATTRIBS];
         namesA[0] = "a_Pos";
         final PipelineCache c = cache(1, 0x1, vecSizesA, baseTypesA);
@@ -501,10 +503,8 @@ class PipelineCacheVertexInputTest {
         final boolean dirtyAfterSameIdDistinctArrays = Reflect.get(c, "inputDirty");
         assertFalse(dirtyAfterSameIdDistinctArrays, "the same interned id must not force a rehash even with distinct array instances");
 
-        final int[] vecSizesB = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizesB[0] = 3; vecSizesB[1] = 4;
-        final int[] baseTypesB = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypesB[0] = Spvc.SPVC_BASETYPE_FP32; baseTypesB[1] = Spvc.SPVC_BASETYPE_FP32;
+        final int[] vecSizesB = vecSizes(3, 4);
+        final int[] baseTypesB = fp32(vecSizesB);
         final String[] namesB = new String[ContextState.MAX_VERTEX_ATTRIBS];
         namesB[0] = "a_Pos"; namesB[1] = "a_Extra";
 
@@ -519,11 +519,7 @@ class PipelineCacheVertexInputTest {
     @Test
     void bindingsArrayIsDenseIndexedBySlot() {
         // D3D12 requirement: SDL's D3D12 backend reads vertex_buffer_descriptions[buffer_slot] as a flat array, so bindings.get(i).slot() must equal i
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[5] = 2;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[5] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x21, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x21, 3, 0, 0, 0, 0, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);
@@ -539,13 +535,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
-    @Test
-    void offsetOnlyPointerChange_keepsKeyAndSkipsRecompute() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
+    @ParameterizedTest(name = "second pointer offset {0}")
+    @ValueSource(longs = {104L, 100L})
+    void reissuedPointerWithSameAlignment_keepsKeyAndSkipsRecompute(long secondOffset) {
+        final PipelineCache c = fp32Cache(0x1, 3);
 
         final ContextState cs = new ContextState();
         final VertexAttribs attribs = new VertexAttribs();
@@ -554,42 +547,16 @@ class PipelineCacheVertexInputTest {
         final long keyA = c.computeKey(store, cs);
         final int runsAfterA = c.inputHashLoopRuns;
 
-        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, 104L);
+        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, secondOffset);
         final long keyB = c.computeKey(store, cs);
 
-        assertEquals(keyA, keyB, "an offset change that keeps the alignment class must not change the pipeline key");
-        assertEquals(runsAfterA, c.inputHashLoopRuns, "an offset-only change must not force the input-hash loop to rerun");
-    }
-
-    @Test
-    void identicalReissuedPointer_isNoOp() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
-
-        final ContextState cs = new ContextState();
-        final VertexAttribs attribs = new VertexAttribs();
-        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, 100L);
-
-        final long keyA = c.computeKey(store, cs);
-        final int runsAfterA = c.inputHashLoopRuns;
-
-        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, 100L);
-        final long keyB = c.computeKey(store, cs);
-
-        assertEquals(keyA, keyB, "an identical re-issued pointer must not change the key");
-        assertEquals(runsAfterA, c.inputHashLoopRuns, "an identical re-issued pointer must be a no-op and not force a rehash");
+        assertEquals(keyA, keyB, "a re-issued pointer that keeps the alignment class must not change the pipeline key");
+        assertEquals(runsAfterA, c.inputHashLoopRuns, "a re-issued pointer that keeps the alignment class must not force the input-hash loop to rerun");
     }
 
     @Test
     void twoEqualLayoutVaosShareKey() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[1] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState csA = new ContextState();
         enableFloatAttrib(csA, 0, 3, 28);
@@ -604,11 +571,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void everyLayoutFieldChangesKey() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x1, 3);
 
         final ContextState base = new ContextState();
         enableFloatAttrib(base, 0, 3, 16);
@@ -665,11 +628,7 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void livenessGenBumpForcesRecompute() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32;
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x1, 3);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);
@@ -687,14 +646,10 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void alternatingTwoInputSetsOnOneVao_loopRunsExactlyTwice() {
-        final int[] vecSizesA = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizesA[0] = 3;
-        final int[] baseTypesA = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypesA[0] = Spvc.SPVC_BASETYPE_FP32;
-        final int[] vecSizesB = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizesB[0] = 3; vecSizesB[1] = 4;
-        final int[] baseTypesB = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypesB[0] = Spvc.SPVC_BASETYPE_FP32; baseTypesB[1] = Spvc.SPVC_BASETYPE_FP32;
+        final int[] vecSizesA = vecSizes(3);
+        final int[] baseTypesA = fp32(vecSizesA);
+        final int[] vecSizesB = vecSizes(3, 4);
+        final int[] baseTypesB = fp32(vecSizesB);
         final String[] names = new String[ContextState.MAX_VERTEX_ATTRIBS];
 
         final PipelineCache c = new PipelineCache();
@@ -718,10 +673,8 @@ class PipelineCacheVertexInputTest {
 
     @Test
     void togglingOneAttribEnable_loopRunsExactlyTwice() {
-        final int[] vecSizes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizes[0] = 3; vecSizes[1] = 4;
-        final int[] baseTypes = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypes[0] = Spvc.SPVC_BASETYPE_FP32; baseTypes[1] = Spvc.SPVC_BASETYPE_FP32;
+        final int[] vecSizes = vecSizes(3, 4);
+        final int[] baseTypes = fp32(vecSizes);
         final PipelineCache c = cache(1, 0x3, vecSizes, baseTypes);
 
         final ContextState cs = new ContextState();
@@ -781,19 +734,15 @@ class PipelineCacheVertexInputTest {
     @Test
     void internVertexInputSet_equalSetsShareId_differentSetsDiffer() {
         final ShaderManager sm = new ShaderManager(null);
-        final int[] vecSizesA = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizesA[0] = 3;
-        final int[] baseTypesA = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypesA[0] = Spvc.SPVC_BASETYPE_FP32;
+        final int[] vecSizesA = vecSizes(3);
+        final int[] baseTypesA = fp32(vecSizesA);
 
         final int idA1 = Reflect.invoke(sm, "internVertexInputSet", new Class<?>[] { int.class, int[].class, int[].class }, 0x1, vecSizesA, baseTypesA);
         final int idA2 = Reflect.invoke(sm, "internVertexInputSet", new Class<?>[] { int.class, int[].class, int[].class }, 0x1, vecSizesA.clone(), baseTypesA.clone());
         assertEquals(idA1, idA2, "two equal input sets, even from distinct array instances, must intern to the same id");
 
-        final int[] vecSizesB = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        vecSizesB[0] = 3; vecSizesB[1] = 4;
-        final int[] baseTypesB = new int[ContextState.MAX_VERTEX_ATTRIBS];
-        baseTypesB[0] = Spvc.SPVC_BASETYPE_FP32; baseTypesB[1] = Spvc.SPVC_BASETYPE_FP32;
+        final int[] vecSizesB = vecSizes(3, 4);
+        final int[] baseTypesB = fp32(vecSizesB);
         final int idB = Reflect.invoke(sm, "internVertexInputSet", new Class<?>[] { int.class, int[].class, int[].class }, 0x3, vecSizesB, baseTypesB);
         assertTrue(idA1 != idB, "different input sets must never share an id");
         assertTrue(idA1 >= 1 && idB >= 1, "interned ids start at 1");

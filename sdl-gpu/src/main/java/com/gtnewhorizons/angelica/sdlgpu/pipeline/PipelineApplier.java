@@ -23,6 +23,7 @@ import com.gtnewhorizons.angelica.sdlgpu.resource.PersistentMapping;
 import com.gtnewhorizons.angelica.sdlgpu.resource.PixelOps;
 import com.gtnewhorizons.angelica.sdlgpu.resource.ResourceManager;
 import com.gtnewhorizons.angelica.sdlgpu.sampler.SamplerBinder;
+import com.gtnewhorizons.angelica.sdlgpu.sampler.MovedSamplerCopies;
 import com.gtnewhorizons.angelica.sdlgpu.sampler.StorageBufferBinder;
 import com.gtnewhorizons.angelica.sdlgpu.sampler.StorageTextureBinder;
 import com.gtnewhorizons.angelica.sdlgpu.shader.MatrixMarshal;
@@ -57,11 +58,13 @@ public final class PipelineApplier {
     private final PersistentBufferSync persistentSync;
     private final SamplerBinder samplerBinder;
     private final StorageTextureBinder storageTextureBinder;
+    private final MovedSamplerCopies movedSamplerCopies;
     private final StorageBufferBinder storageBufferBinder;
     private final LogicOpEmulator logicOpEmulator;
 
     private DrawDispatch.FanUploadSink deferredUploadSink;
     public void setDeferredUploadSink(DrawDispatch.FanUploadSink sink) { this.deferredUploadSink = sink; }
+    private final InstancedConstantBuffers instancedConstants;
     private boolean ringOverflowWarned;
 
     private final IntOpenHashSet pipelineZeroWarned        = new IntOpenHashSet();
@@ -75,7 +78,7 @@ public final class PipelineApplier {
 
     private final int[] scissorRect = new int[4];
 
-    public PipelineApplier(FrameManager frameManager, ResourceManager resourceManager, ShaderManager shaderManager, PipelineStore pipelineStore, FBOClearTracker fboClearTracker, PersistentBufferSync persistentSync, SamplerBinder samplerBinder, StorageTextureBinder storageTextureBinder, StorageBufferBinder storageBufferBinder) {
+    public PipelineApplier(FrameManager frameManager, ResourceManager resourceManager, ShaderManager shaderManager, PipelineStore pipelineStore, FBOClearTracker fboClearTracker, PersistentBufferSync persistentSync, SamplerBinder samplerBinder, StorageTextureBinder storageTextureBinder, StorageBufferBinder storageBufferBinder, MovedSamplerCopies movedSamplerCopies) {
         this.frameManager = frameManager;
         this.resourceManager = resourceManager;
         this.shaderManager = shaderManager;
@@ -84,8 +87,36 @@ public final class PipelineApplier {
         this.persistentSync = persistentSync;
         this.samplerBinder = samplerBinder;
         this.storageTextureBinder = storageTextureBinder;
+        this.movedSamplerCopies = movedSamplerCopies;
         this.storageBufferBinder = storageBufferBinder;
         this.logicOpEmulator = new LogicOpEmulator(frameManager, resourceManager, shaderManager, this);
+        this.instancedConstants = new InstancedConstantBuffers(resourceManager);
+    }
+
+    /**
+     * Runs after {@link #applyPipelineAndState} for an instanced draw. On Metal every attribute without an enabled array
+     * is rebound to a buffer repeating its value once per instance (see {@link InstancedConstantBuffers}).
+     */
+    public void bindInstancedConstants(ContextState st, long rp, int instances) {
+        if (instances <= 1 || deferredUploadSink == null || !pipelineStore.device().isMetal()) return;
+        final ContextState.VAOState vao = st.currentVao;
+        final int usedMask = st.pipeline.shaderInputMask | vao.attribEnabledMask;
+        if (usedMask == 0) return;
+        final int bindingSize = SDL_GPUBufferBinding.SIZEOF;
+        final int maxSlot = 31 - Integer.numberOfLeadingZeros(usedMask);
+        int constants = ~vao.attribEnabledMask & ((1 << (maxSlot + 1)) - 1);
+        while (constants != 0) {
+            final int i = Integer.numberOfTrailingZeros(constants);
+            constants &= constants - 1;
+            final float[] d = st.attribDefaults;
+            final long buffer = instancedConstants.buffer(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], d[i * 4 + 3], instances, deferredUploadSink);
+            if (buffer == 0) continue;
+            final long elemAddr = st.vboBindingsAddr + (long) i * bindingSize;
+            MemoryAccess.putAddress(elemAddr + SDL_GPUBufferBinding.BUFFER, buffer);
+            MemoryAccess.putInt(elemAddr + SDL_GPUBufferBinding.OFFSET, 0);
+            nSDL_BindGPUVertexBuffers(rp, i, elemAddr, 1);
+        }
+        st.lastAppliedVboBindGen = -1;
     }
 
     public void ensureDrawRenderPass(ContextState st) {
@@ -94,7 +125,7 @@ public final class PipelineApplier {
 
     public void ensureDrawRenderPass(ContextState st, FrameState f) {
         logicOpEmulator.beforeDraw(st, f);
-        ensureRenderPass(st, f);
+        ensureRenderPass(st, f, true);
     }
 
     public void ensureRenderPass(ContextState st) {
@@ -102,6 +133,10 @@ public final class PipelineApplier {
     }
 
     public void ensureRenderPass(ContextState st, FrameState f) {
+        ensureRenderPass(st, f, false);
+    }
+
+    private void ensureRenderPass(ContextState st, FrameState f, boolean draw) {
         if (!f.frameActive) return;
 
         fboClearTracker.flushPendingClearsForBoundSamplers(st);
@@ -123,6 +158,7 @@ public final class PipelineApplier {
         }
 
         if (st.boundFboId == 0) {
+            if (draw) movedSamplerCopies.prepare(st, f, FrameManager.fbo0PassStaysOpen(st, f));
             if (frameManager.ensureFbo0RenderPass(f, st)) {
                 st.pipeline.setDepthTargetFormat(resourceManager.getSwapchainDepthStencilFormat());
             }
@@ -139,9 +175,14 @@ public final class PipelineApplier {
         if (!fbo.hasAnyColor && fbo.depthTexture == 0) return;
 
         final long primaryTarget = fbo.primaryTarget;
-        if (f.renderPass != 0 && f.activeLayoutHash == fbo.structuralLayoutHash && f.currentColorTarget == primaryTarget && f.currentDepthTarget == fbo.depthTexture && !FBOClearTracker.fboHasPendingClear(st, fbo)) {
+        final boolean keepsOpenPass = f.renderPass != 0 && f.activeLayoutHash == fbo.structuralLayoutHash && f.currentColorTarget == primaryTarget && f.currentDepthTarget == fbo.depthTexture && !FBOClearTracker.fboHasPendingClear(st, fbo);
+        if (draw) movedSamplerCopies.prepare(st, f, keepsOpenPass);
+        // Preparing a stale sampler copy can end the pass even when the attachments still match.
+        if (keepsOpenPass && f.renderPass != 0) {
             return;
         }
+
+        fboClearTracker.materializePendingClearsForMipTargets(st, fbo);
 
         final int totalTargets = fbo.drawBuffers.length;
         final long dummyTex = totalTargets > 0 ? resourceManager.getOrCreateDummyColorTarget() : 0L;
@@ -151,17 +192,21 @@ public final class PipelineApplier {
         for (int i = 0; i < totalTargets; i++) {
             final int db = fbo.drawBuffers[i];
             final long tex;
+            final int level;
             if (db >= 0 && db < ContextState.MAX_COLOR_ATTACHMENTS && fbo.colorTextures[db] != 0) {
                 tex = fbo.colorTextures[db];
+                level = fbo.colorLevels[db];
             } else {
                 tex = dummyTex;
+                level = 0;
             }
             final boolean pendingClear = tex != dummyTex && st.pendingColorTextures.contains(tex);
             final boolean defined = tex != dummyTex && resourceManager.isTextureContentDefined(tex);
-            final boolean firstUse = !pendingClear && tex != dummyTex && !defined;
+            final boolean firstUse = !pendingClear && tex != dummyTex && !defined && level == 0;
             if (pendingClear || firstUse) proposedClearOps |= 1 << i;
             layoutHash = Hashing.fmix64(layoutHash, tex);
             layoutHash = Hashing.fmix64(layoutHash, db);
+            layoutHash = Hashing.fmix64(layoutHash, level);
             if (pendingClear || firstUse) {
                 final float[] c = pendingClear ? st.pendingColorValues.get(tex) : null;
                 layoutHash = foldClearColor(layoutHash, c != null ? c[0] : st.clearR, c != null ? c[1] : st.clearG, c != null ? c[2] : st.clearB, c != null ? c[3] : st.clearA);
@@ -173,10 +218,12 @@ public final class PipelineApplier {
         if (fbo.depthTexture != 0) {
             final boolean defined = resourceManager.isTextureContentDefined(fbo.depthTexture);
             final boolean pendingClear = st.pendingDepthTextures.contains(fbo.depthTexture);
-            proposedDepthClear = pendingClear || !defined;
+            final boolean firstUse = !defined && fbo.depthLevel == 0;
+            proposedDepthClear = pendingClear || firstUse;
             final boolean pendingStencil = depthHasStencil && st.pendingStencilTextures.contains(fbo.depthTexture);
-            proposedStencilClear = depthHasStencil && (pendingStencil || !defined);
+            proposedStencilClear = depthHasStencil && (pendingStencil || firstUse);
             layoutHash = Hashing.fmix64(layoutHash, fbo.depthTexture);
+            layoutHash = Hashing.fmix64(layoutHash, fbo.depthLevel);
             if (proposedDepthClear) {
                 layoutHash = foldClearDepth(layoutHash, pendingClear ? st.pendingDepthValues.get(fbo.depthTexture) : st.depthClearValue);
             }
@@ -204,15 +251,19 @@ public final class PipelineApplier {
                 for (int i = 0; i < totalTargets; i++) {
                     final int db = fbo.drawBuffers[i];
                     final long tex;
+                    final int level;
                     if (db >= 0 && db < ContextState.MAX_COLOR_ATTACHMENTS && fbo.colorTextures[db] != 0) {
                         tex = fbo.colorTextures[db];
+                        level = fbo.colorLevels[db];
                     } else {
                         tex = dummyTex;
+                        level = 0;
                     }
                     final boolean pendingClear = tex != dummyTex && st.pendingColorTextures.contains(tex);
                     final boolean clearThis = (proposedClearOps & (1 << i)) != 0;
                     final long ctAddr = colorTargets.address() + (long) i * SDL_GPUColorTargetInfo.SIZEOF;
                     MemoryAccess.putAddress(ctAddr + SDL_GPUColorTargetInfo.TEXTURE, tex);
+                    MemoryAccess.putInt(ctAddr + SDL_GPUColorTargetInfo.MIP_LEVEL, level);
                     MemoryAccess.putInt(ctAddr + SDL_GPUColorTargetInfo.LOAD_OP, clearThis ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD);
                     MemoryAccess.putInt(ctAddr + SDL_GPUColorTargetInfo.STORE_OP, db >= 0 ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE);
                     if (clearThis) {
@@ -237,6 +288,7 @@ public final class PipelineApplier {
                 depthTarget = fbo.cachedDepthTarget;
                 final long dtAddr = depthTarget.address();
                 MemoryAccess.putAddress(dtAddr + SDL_GPUDepthStencilTargetInfo.TEXTURE, fbo.depthTexture);
+                MemoryAccess.putByte(dtAddr + SDL_GPUDepthStencilTargetInfo.MIP_LEVEL, (byte) fbo.depthLevel);
                 MemoryAccess.putInt(dtAddr + SDL_GPUDepthStencilTargetInfo.LOAD_OP, proposedDepthClear ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD);
                 MemoryAccess.putInt(dtAddr + SDL_GPUDepthStencilTargetInfo.STORE_OP, SDL_GPU_STOREOP_STORE);
                 if (proposedDepthClear) {
@@ -685,8 +737,8 @@ public final class PipelineApplier {
         final int offset = st.uboRangeOffset[binding];
         final PersistentMapping pm = resourceManager.getPersistentMapping(glId);
         if (pm != null) {
-            if (offset < 0 || offset + size > pm.staging.capacity()) return 0L;
-            return MemoryUtil.memAddress0(pm.staging) + offset;
+            if (!pm.covers(offset, size)) return 0L;
+            return MemoryUtil.memAddress0(pm.staging) + pm.stagingIndex(offset);
         }
         final ByteBuffer shadow = resourceManager.getUboShadow(glId);
         if (shadow != null) {

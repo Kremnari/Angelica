@@ -56,6 +56,7 @@ final class InstancedTemplateRenderer {
     private final Reference2ObjectOpenHashMap<TemplateBuffer, TemplateMesh> meshes = new Reference2ObjectOpenHashMap<>();
     private final ObjectArrayList<Bucket> bucketPool = new ObjectArrayList<>();
     private final ObjectArrayList<Bucket> liveBuckets = new ObjectArrayList<>();
+    private final ObjectArrayList<TemplateBuffer> retired = new ObjectArrayList<>();
 
     private final InstanceRing ring;
     private ByteBuffer staging;
@@ -178,12 +179,13 @@ final class InstancedTemplateRenderer {
                 final int light = data.lights.getInt(i);
                 final int overlay = data.overlays.getInt(i);
                 final long info = data.infos.getLong(i);
-                for (int p = 0, n = partCubes.length; p < n; p++) {
-                    final CubeParams cube = partCubes[p];
+                final EntityTextureAtlas.Slot slot = data.atlasSlot(run, i);
+                final EntityTextureAtlas.Slot region = slot != null ? slot : EntityTextureAtlas.Slot.WHOLE_TEXTURE;
+                for (final CubeParams cube : partCubes) {
                     cube.writeRows(ptr, data.matrices, off, scale);
                     InstancedAttribs.writeTail(ptr, color, overlay, info);
                     InstancedAttribs.writeLightmap(ptr + CubeInstancedAttribs.OFFSET_LIGHTMAP_SCALE, light);
-                    cube.writeTexture(ptr);
+                    cube.writeTexture(ptr, region.u, region.v, region.w, region.h);
                     ptr += CubeInstancedAttribs.STRIDE;
                 }
             }
@@ -313,6 +315,18 @@ final class InstancedTemplateRenderer {
         ring.postDraw();
     }
 
+    void retire(TemplateBuffer template) {
+        retired.add(template);
+    }
+
+    void releaseRetired() {
+        for (int i = 0, n = retired.size(); i < n; i++) {
+            final TemplateMesh mesh = meshes.remove(retired.get(i));
+            if (mesh != null) delete(mesh);
+        }
+        retired.clear();
+    }
+
     void sweep(long now) {
         if (meshes.isEmpty()) return;
         final ObjectIterator<TemplateMesh> it = meshes.values().iterator();
@@ -329,6 +343,7 @@ final class InstancedTemplateRenderer {
             delete(mesh);
         }
         meshes.clear();
+        retired.clear();
         liveBuckets.clear();
         bucketPool.clear();
         staging = null;

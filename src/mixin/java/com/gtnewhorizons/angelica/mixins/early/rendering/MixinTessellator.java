@@ -18,6 +18,9 @@ public class MixinTessellator implements StateAwareTessellator, BiomeBlendTessel
     @Unique
     private BiomeVertexBlender angelica$biomeBlender;
 
+    @Unique
+    private BiomeVertexBlender angelica$liquidBlender;
+
     @Override
     public BiomeVertexBlender angelica$getBiomeBlender() {
         return angelica$biomeBlender;
@@ -26,11 +29,12 @@ public class MixinTessellator implements StateAwareTessellator, BiomeBlendTessel
     @Override
     public void angelica$setBiomeBlender(BiomeVertexBlender blender) {
         angelica$biomeBlender = blender;
+        angelica$liquidBlender = blender != null && blender.isWater() ? blender : null;
     }
 
     @ModifyExpressionValue(method = "addVertex", at = @At(value = "FIELD", target = "Lnet/minecraft/client/renderer/Tessellator;color:I"))
     private int angelica$blendVertexColor(int original, @Local(argsOnly = true, ordinal = 0) double x, @Local(argsOnly = true, ordinal = 1) double y, @Local(argsOnly = true, ordinal = 2) double z) {
-        return angelica$biomeBlender == null ? original : angelica$biomeBlender.tint(original, x, y, z);
+        return angelica$liquidBlender == null ? original : angelica$liquidBlender.tint(original, x, y, z);
     }
 
     @Unique
@@ -55,9 +59,22 @@ public class MixinTessellator implements StateAwareTessellator, BiomeBlendTessel
         this.celeritasMeshing = active;
     }
 
+    @Override
+    public boolean angelica$isCeleritasMeshing() {
+        return this.celeritasMeshing;
+    }
+
     @Inject(method = "addVertex", at = @At("RETURN"))
     private void addElementState(CallbackInfo ci) {
         if (!celeritasMeshing) return;
+
+        // Vanilla only writes the normal slot after setNormal, leaving whatever an earlier vertex put there otherwise.
+        // Zero means "no normal" to the light pipeline, which then falls back to the computed face normal.
+        final Tessellator self = (Tessellator) (Object) this;
+        if (!self.hasNormals) {
+            self.rawBuffer[self.rawBufferIndex - 2] = 0;
+        }
+
         int state = 0;
 
         if (appliedAo) state |= StateAwareTessellator.RENDERED_WITH_VANILLA_AO;
@@ -99,5 +116,10 @@ public class MixinTessellator implements StateAwareTessellator, BiomeBlendTessel
     @Override
     public void angelica$setShaderOverrideBlockId(short blockId) {
         this.currentShaderOverrideBlockId = blockId;
+    }
+
+    @Override
+    public short angelica$getShaderOverrideBlockId() {
+        return this.currentShaderOverrideBlockId;
     }
 }

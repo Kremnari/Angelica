@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.sdlgpu.frame;
 import com.gtnewhorizons.angelica.glsm.GLContextState;
 import com.gtnewhorizons.angelica.sdlgpu.SDLGPURenderBackend;
 import com.gtnewhorizons.angelica.sdlgpu.pipeline.PipelineCache;
+import com.gtnewhorizons.angelica.sdlgpu.resource.MappedRange;
 import com.gtnewhorizons.angelica.sdlgpu.resource.PackState;
 import com.gtnewhorizons.angelica.sdlgpu.shader.LogicOpVariant;
 import com.gtnewhorizons.angelica.sdlgpu.shader.ShaderManager;
@@ -138,6 +139,7 @@ public final class ContextState {
     public int logicOpMode = GL11.GL_COPY;
     public long appliedLogicOpKey;
     public LogicOpVariant activeLogicOpVariant;
+    public final int[] blitRect = new int[8];
     public final long[] logicOpScratch = new long[MAX_COLOR_ATTACHMENTS];
     public final int[] logicOpScratchFormat = new int[MAX_COLOR_ATTACHMENTS];
     public final int[] logicOpScratchWidth = new int[MAX_COLOR_ATTACHMENTS];
@@ -171,6 +173,12 @@ public final class ContextState {
     public int lastAppliedStorageTexBindGen = -1;
     public int lastAppliedStorageTexProgram;
     public long lastAppliedStorageTexCb;
+    public ShaderManager.ProgramObject lastPreparedMovedSamplerProgram;
+    public final int[] lastPreparedVertexMovedSamplerTextures = new int[MAX_IMAGE_UNITS];
+    public final int[] lastPreparedFragmentMovedSamplerTextures = new int[MAX_IMAGE_UNITS];
+    public int lastPreparedMovedSamplerUnitsGen = -1;
+    public long lastPreparedMovedSamplerWriteGen = -1;
+    public long lastPreparedMovedSamplerPass = -1;
     public int ssboBindGen;
     public int lastAppliedStorageBufBindGen = -1;
     public int lastAppliedStorageBufProgram;
@@ -302,6 +310,10 @@ public final class ContextState {
     public final int[] boundStorageTextureAccess = new int[MAX_IMAGE_UNITS];
     public final int[] boundStorageTextureFormat = new int[MAX_IMAGE_UNITS];
     public final int[] boundTextures = new int[32];
+
+    public int boundTexture(int unit) {
+        return unit >= 0 && unit < boundTextures.length ? boundTextures[unit] : 0;
+    }
     public final int[] boundSamplerObjects = new int[32];
 
     public boolean computeBatchRequested;
@@ -313,12 +325,7 @@ public final class ContextState {
     public final long[] computeBatchRwTexs = new long[MAX_IMAGE_UNITS];
     public final int[] computeBatchRwTexLevels = new int[MAX_IMAGE_UNITS];
 
-    public int mappedBufferGlId;
-    public ByteBuffer mappedStagingBuffer;
-    public long mappedOffset;
-    public long mappedLength;
-    public boolean mappedInvalidate;
-    public int mappedAccessFlags;
+    public final MappedRange mappingScratch = new MappedRange();
 
     public final SDL_GPUTextureSamplerBinding.Buffer fragSamplerBindings = SDL_GPUTextureSamplerBinding.calloc(MAX_SAMPLERS);
     public final SDL_GPUTextureSamplerBinding.Buffer vertSamplerBindings = SDL_GPUTextureSamplerBinding.calloc(MAX_SAMPLERS);

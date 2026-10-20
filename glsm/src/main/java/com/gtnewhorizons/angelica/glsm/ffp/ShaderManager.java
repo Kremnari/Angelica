@@ -100,7 +100,6 @@ public final class ShaderManager {
             VertexShaderGenerator.generate(VertexKey.fromPacked(VertexKey.withInstancing(vkPacked, Instancing.CUBE)));
             VertexShaderGenerator.generate(VertexKey.fromPacked(VertexKey.withInstancing(vkPacked, Instancing.PARTICLE)));
             FragmentShaderGenerator.generate(FragmentKey.fromPacked(fkScratch, fkLen));
-            GeometryShaderGenerator.generate(vk);
             final Class<?>[] touched = { Program.class, ShaderCache.class, TessellatorStreamingDrawer.class, QuadConverter.class };
             for (Class<?> c : touched) {
                 c.getName();
@@ -140,6 +139,7 @@ public final class ShaderManager {
         GLSMHooks.resolvePendingProgram();
         final DeferredBlendHandler bh = GLSMHooks.blendHandler;
         if (bh != null) bh.flushDeferredBlend();
+        GLStateManager.flushEntityIds(glCtx);
 
         // Handle FFP & Iris uniforms
         final int currentProgramId = glCtx.activeProgram;

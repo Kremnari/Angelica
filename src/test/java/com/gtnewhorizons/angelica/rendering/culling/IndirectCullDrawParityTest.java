@@ -1,5 +1,7 @@
 package com.gtnewhorizons.angelica.rendering.culling;
 
+import com.gtnewhorizons.angelica.glsm.GlTestSupport;
+import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import org.embeddedt.embeddium.impl.render.chunk.data.SectionRenderDataUnsafe;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.BatchAssembler;
 import org.embeddedt.embeddium.impl.render.chunk.compile.sorting.QuadPrimitiveType;
@@ -26,18 +28,19 @@ import org.embeddedt.embeddium.impl.gl.device.IndirectMultiDrawBatch;
 import org.embeddedt.embeddium.impl.gl.device.MultiDrawBatch;
 import org.embeddedt.embeddium.impl.gl.device.MultiDrawBatchFactory;
 import org.embeddedt.embeddium.impl.render.chunk.region.RenderRegion;
+import org.embeddedt.embeddium.impl.render.viewport.CameraTransform;
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL43;
 
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
@@ -184,7 +187,7 @@ class IndirectCullDrawParityTest {
     static void setUpDevice() {
         RenderDevice.enterManagedCode();
         commandList = RenderDevice.INSTANCE.createCommandList();
-        program = buildProgram();
+        program = GlTestSupport.program(FLAT_VS, GlTestSupport.TRIVIAL_FS);
     }
 
     @AfterAll
@@ -201,33 +204,9 @@ class IndirectCullDrawParityTest {
         GLStateManager.glViewport(0, 0, 800, 600);
     }
 
-    static final String FLAT_VS = "#version 330 core\n"
+    private static final String FLAT_VS = "#version 330 core\n"
         + "layout(location = 0) in vec3 a_Pos;\n"
         + "void main() { gl_Position = vec4(a_Pos, 1.0); }\n";
-    static final String FLAT_FS = "#version 330 core\n"
-        + "out vec4 fragColor;\n"
-        + "void main() { fragColor = vec4(1.0); }\n";
-
-    static int compileShader(int type, String src) {
-        final int shader = GLStateManager.glCreateShader(type);
-        GLStateManager.glShaderSource(shader, src);
-        GLStateManager.glCompileShader(shader);
-        assertEquals(GL11.GL_TRUE, GLStateManager.glGetShaderi(shader, GL20.GL_COMPILE_STATUS), () -> "shader failed to compile:\n" + GLStateManager.glGetShaderInfoLog(shader, 4096));
-        return shader;
-    }
-
-    private static int buildProgram() {
-        final int vsh = compileShader(GL20.GL_VERTEX_SHADER, FLAT_VS);
-        final int fsh = compileShader(GL20.GL_FRAGMENT_SHADER, FLAT_FS);
-        final int prog = GLStateManager.glCreateProgram();
-        GLStateManager.glAttachShader(prog, vsh);
-        GLStateManager.glAttachShader(prog, fsh);
-        GLStateManager.glLinkProgram(prog);
-        assertEquals(GL11.GL_TRUE, GLStateManager.glGetProgrami(prog, GL20.GL_LINK_STATUS), () -> "parity program failed to link:\n" + GLStateManager.glGetProgramInfoLog(prog, 4096));
-        GLStateManager.glDeleteShader(vsh);
-        GLStateManager.glDeleteShader(fsh);
-        return prog;
-    }
 
     private static Scene buildScene() {
         final Scene scene = new Scene();
@@ -387,13 +366,7 @@ class IndirectCullDrawParityTest {
     }
 
     private static void setFrustumUbo(GpuTerrainCuller culler, ByteBuffer ubo) {
-        try {
-            final Field field = GpuTerrainCuller.class.getDeclaredField("frustumUboBytes");
-            field.setAccessible(true);
-            field.set(culler, ubo);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException(e);
-        }
+        Reflect.set(culler, "frustumUboBytes", ubo);
     }
 
     private static void executeRegion(GpuTerrainCuller culler, RenderRegion region, GlVertexArrayTessellation tessellation) {
@@ -404,40 +377,21 @@ class IndirectCullDrawParityTest {
     }
 
     private static int reflectInt(GpuTerrainCuller emitter, String fieldName) {
-        try {
-            final Field field = GpuTerrainCuller.class.getDeclaredField(fieldName);
-            field.setAccessible(true);
-            return field.getInt(emitter);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException(e);
-        }
+        return Reflect.<Integer>get(emitter, fieldName);
     }
 
     private static Object reflectPassState(GpuTerrainCuller gpu, String fieldName) {
-        try {
-            final Field field = GpuTerrainCuller.class.getDeclaredField(fieldName);
-            field.setAccessible(true);
-            return field.get(gpu);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException(e);
-        }
+        return Reflect.get(gpu, fieldName);
     }
 
     private static boolean reflectDispatched(Object passState) {
-        try {
-            final Field field = passState.getClass().getDeclaredField("dispatched");
-            field.setAccessible(true);
-            return field.getBoolean(passState);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException(e);
-        }
+        return Reflect.<Boolean>get(passState, "dispatched");
     }
 
-    private static ByteBuffer frustumUbo(int indexPointerMask) {
+    private static ByteBuffer frustumUbo() {
         final ByteBuffer ubo = FrustumExtractor.allocateUboByteBuffer();
         final Matrix4f identity = new Matrix4f();
-        FrustumExtractor.writeStd140(identity, 0, indexPointerMask, ubo);
-        FrustumExtractor.patchCameraWorld(0f, 0f, 0f, ubo);
+        FrustumExtractor.writeFrustum(identity, identity, new CameraTransform(0.0, 0.0, 0.0), new Matrix4f(), ubo);
         FrustumExtractor.patchBypassFrustum(true, ubo);
         FrustumExtractor.patchPrimitiveRatio(QuadPrimitiveType.TRIANGULATED.getVerticesPerPrimitive(), QuadPrimitiveType.TRIANGULATED.getIndexBufferElementsPerPrimitive(), ubo);
         return ubo;
@@ -528,7 +482,7 @@ class IndirectCullDrawParityTest {
 
         gpu.beginCombinedPasses(0, 0);
         assertTrue(gpu.isComputeActiveThisPass(), "compute path unexpectedly inactive");
-        setFrustumUbo(gpu, frustumUbo(0));
+        setFrustumUbo(gpu, frustumUbo());
         gpu.syncSectionMetaIfDirty();
 
         int outputBase = 0;
@@ -549,7 +503,7 @@ class IndirectCullDrawParityTest {
         assertIndirectBufferMatches(result.combinedIndirectBuffer, result.expectedCombined, frameLabel + " combined solid+cutout pass");
 
         gpu.beginCullPass(0xFFFFFFFF);
-        setFrustumUbo(gpu, frustumUbo(0xFFFFFFFF));
+        setFrustumUbo(gpu, frustumUbo());
         gpu.syncSectionMetaIfDirty();
         walkSections(scene.sorted, gpu, region1, 0, result.expectedSorted, 0xFFFFFFFF);
         executeRegion(gpu, region1, tessSorted);
@@ -711,12 +665,9 @@ class IndirectCullDrawParityTest {
         }
     }
 
-    @Test
-    void cutoutAndTranslucentShareOneChainedDispatchWithoutSolid() {
-        unsortedAndTranslucentShareOneChainedDispatch(true);
-    }
-
-    private void unsortedAndTranslucentShareOneChainedDispatch(boolean cutout) {
+    @ParameterizedTest(name = "cutout={0}")
+    @ValueSource(booleans = {false, true})
+    void unsortedAndTranslucentShareOneChainedDispatch(boolean cutout) {
         assumeTrue(RenderSystem.supportsCompute() && RenderSystem.supportsMultiDrawIndirect(),
             "compute-driven indirect culling unsupported");
 
@@ -757,12 +708,12 @@ class IndirectCullDrawParityTest {
 
                     gpu.beginCullPass(0);
                     assertTrue(gpu.isComputeActiveThisPass(), "compute path unexpectedly inactive");
-                    setFrustumUbo(gpu, frustumUbo(0));
+                    setFrustumUbo(gpu, frustumUbo());
                     gpu.syncSectionMetaIfDirty();
                     final int afterSolid = walkSections(unsorted, gpu, solidRegion, 0, new ArrayList<>(), 0);
 
                     gpu.startSortedPass(0xFFFFFFFF);
-                    setFrustumUbo(gpu, frustumUbo(0xFFFFFFFF));
+                    setFrustumUbo(gpu, frustumUbo());
                     gpu.syncSectionMetaIfDirty();
                     walkSections(scene.sorted, gpu, sortedRegion, afterSolid, new ArrayList<>(), 0xFFFFFFFF);
                     gpu.finishSortedPass();

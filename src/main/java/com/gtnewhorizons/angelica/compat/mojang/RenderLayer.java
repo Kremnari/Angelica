@@ -5,7 +5,9 @@ import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormat;
 import com.gtnewhorizons.angelica.api.tesr.TesrMaterial;
 import com.gtnewhorizons.angelica.api.tesr.TesrShader;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.hooks.TextureUtilHooks;
 import com.gtnewhorizons.angelica.rendering.tesr.DrawState;
+import com.gtnewhorizons.angelica.rendering.tesr.TesrShaderPrograms;
 import com.gtnewhorizons.angelica.shadercompat.ShaderGlint;
 import it.unimi.dsi.fastutil.Hash;
 import it.unimi.dsi.fastutil.objects.ObjectOpenCustomHashSet;
@@ -18,7 +20,6 @@ import net.coderbot.iris.gbuffer_overrides.matching.SpecialCondition;
 import net.coderbot.iris.layer.GbufferPrograms;
 import net.coderbot.iris.layer.PassOverride;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.TextureUtil;
 import net.minecraft.util.ResourceLocation;
 import org.lwjgl.opengl.GL11;
 
@@ -46,7 +47,7 @@ public final class RenderLayer implements BlendingStateHolder {
     private static final Hook BEACON_BEAM_HOOK = new Hook(
         () -> GbufferPrograms.setupSpecialRenderCondition(SpecialCondition.BEACON_BEAM),
         GbufferPrograms::teardownSpecialRenderCondition);
-    private static final Reference2ObjectOpenHashMap<TesrShader, Hook> SHADER_HOOKS = new Reference2ObjectOpenHashMap<>();
+    private static final Reference2ObjectOpenHashMap<TesrShader, Reference2ObjectOpenHashMap<PassOverride, Hook[]>> SHADER_HOOKS = new Reference2ObjectOpenHashMap<>();
     private static final Reference2ObjectOpenHashMap<PassOverride, Hook> PASS_HOOKS = new Reference2ObjectOpenHashMap<>();
 
     private String name;
@@ -86,21 +87,21 @@ public final class RenderLayer implements BlendingStateHolder {
         this.hash = h;
     }
 
-    public static RenderLayer tesr(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit) {
-        return tesr(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cull, lit, false);
+    public static RenderLayer tesr(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean lightmap) {
+        return tesr(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cull, lit, lightmap, false);
     }
 
-    public static RenderLayer tesr(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean afterGlint) {
-        return build(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cull, lit, false, afterGlint);
+    public static RenderLayer tesr(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean lightmap, boolean afterGlint) {
+        return build(texture, material, pass, offsetFactor, offsetUnits, glintSlot, cull, lit, lightmap, false, afterGlint);
     }
 
-    public static RenderLayer tesrNoPass(ResourceLocation texture, TesrMaterial material, int cull, boolean lit) {
-        return build(texture, material, PassOverride.NONE, 0.0f, 0.0f, ShaderGlint.NO_TINT, cull, lit, true, false);
+    public static RenderLayer tesrNoPass(ResourceLocation texture, TesrMaterial material, int cull, boolean lit, boolean lightmap) {
+        return build(texture, material, PassOverride.NONE, 0.0f, 0.0f, ShaderGlint.NO_TINT, cull, lit, lightmap, true, false);
     }
 
-    private static RenderLayer build(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean noPass, boolean afterGlint) {
-        final DrawState state = DrawState.forMaterial(material, cull, lit, offsetFactor, offsetUnits);
-        final Hook hook = hookFor(material, noPass ? PassOverride.NONE : pass, glintSlot);
+    private static RenderLayer build(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean lightmap, boolean noPass, boolean afterGlint) {
+        final DrawState state = DrawState.forMaterial(material, cull, lit, lightmap, offsetFactor, offsetUnits);
+        final Hook hook = hookFor(material, noPass ? PassOverride.NONE : pass, glintSlot, state.isLightmap());
         final TransparencyType transparency = afterGlint ? TransparencyType.AFTER_GLINT : transparencyFor(state.getBlend());
         final RenderLayer candidate = new RenderLayer(null, BatchVertexFormats.POSITION_COLOR_TEXTURE_LIGHTF_NORMAL,
             GL11.GL_QUADS, TESR_BUFFER_SIZE, state, texture, material.isUnfilteredAtlas(), transparency, hook,
@@ -110,7 +111,7 @@ public final class RenderLayer implements BlendingStateHolder {
             retained.name = "angelica_tesr_" + (noPass ? "nopass_" : "")
                 + material.transparency().name().toLowerCase(Locale.ROOT) + (noPass ? "" : pass.nameSuffix())
                 + (offsetFactor == 0.0f && offsetUnits == 0.0f ? "" : "_offset" + offsetFactor + "_" + offsetUnits)
-                + "_cull" + state.getCull() + (state.isLit() ? "_lit" : "")
+                + "_cull" + state.getCull() + (state.isLit() ? "_lit" : "") + (state.isLightmap() ? "" : "_nolightmap")
                 + (glintSlot == ShaderGlint.NO_TINT ? "" : "_tint" + glintSlot) + (afterGlint ? "_after_glint" : "");
         }
         return retained;
@@ -129,10 +130,6 @@ public final class RenderLayer implements BlendingStateHolder {
         }
     }
 
-    public static int cacheSize() {
-        return CACHE.size();
-    }
-
     private static TransparencyType transparencyFor(int blend) {
         return switch (blend) {
             case DrawState.OPAQUE -> TransparencyType.OPAQUE;
@@ -141,7 +138,7 @@ public final class RenderLayer implements BlendingStateHolder {
         };
     }
 
-    private static Hook hookFor(TesrMaterial material, PassOverride pass, int glintSlot) {
+    private static Hook hookFor(TesrMaterial material, PassOverride pass, int glintSlot, boolean lightmap) {
         switch (material.special()) {
             case GLINT -> {
                 return glintHook(glintSlot);
@@ -152,7 +149,7 @@ public final class RenderLayer implements BlendingStateHolder {
             case NONE -> {
                 final TesrShader shader = material.shader();
                 if (shader != null) {
-                    return shaderHook(shader);
+                    return shaderHook(shader, pass, lightmap);
                 }
             }
         }
@@ -171,11 +168,40 @@ public final class RenderLayer implements BlendingStateHolder {
         return hook;
     }
 
-    private static Hook shaderHook(TesrShader shader) {
-        Hook hook = SHADER_HOOKS.get(shader);
+    private static Hook shaderHook(TesrShader shader, PassOverride pass, boolean lightmap) {
+        Reference2ObjectOpenHashMap<PassOverride, Hook[]> byPass = SHADER_HOOKS.get(shader);
+        if (byPass == null) {
+            byPass = new Reference2ObjectOpenHashMap<>();
+            SHADER_HOOKS.put(shader, byPass);
+        }
+        Hook[] byLightmap = byPass.get(pass);
+        if (byLightmap == null) {
+            byLightmap = new Hook[2];
+            byPass.put(pass, byLightmap);
+        }
+        final int slot = lightmap ? 1 : 0;
+        Hook hook = byLightmap[slot];
         if (hook == null) {
-            hook = new Hook(shader.bind(), shader.release());
-            SHADER_HOOKS.put(shader, hook);
+            final Hook packHook = pass == PassOverride.NONE ? null : passHook(pass);
+            final TesrShaderPrograms.Entry entry = TesrShaderPrograms.entry(shader);
+            final boolean[] packDrew = new boolean[1];
+            final Runnable bind = shader.bind() != null ? shader.bind() : () -> TesrShaderPrograms.bindBaked(entry, lightmap);
+            final Runnable release = shader.release() != null ? shader.release() : () -> TesrShaderPrograms.release(entry);
+            hook = new Hook(() -> {
+                packDrew[0] = TesrShaderPrograms.packActive();
+                if (!packDrew[0]) {
+                    bind.run();
+                } else if (packHook != null) {
+                    packHook.begin.run();
+                }
+            }, () -> {
+                if (!packDrew[0]) {
+                    release.run();
+                } else if (packHook != null) {
+                    packHook.end.run();
+                }
+            });
+            byLightmap[slot] = hook;
         }
         return hook;
     }
@@ -204,7 +230,7 @@ public final class RenderLayer implements BlendingStateHolder {
                 Minecraft.getMinecraft().getTextureManager().bindTexture(textureId);
                 if (unfilteredAtlas) {
                     filtering = true;
-                    TextureUtil.func_152777_a(false, false, 1.0F);
+                    TextureUtilHooks.forceNearestFilter();
                 }
             } else {
                 GLStateManager.disableTexture();
@@ -223,7 +249,7 @@ public final class RenderLayer implements BlendingStateHolder {
             }
             if (filtering) {
                 try {
-                    TextureUtil.func_147945_b();
+                    TextureUtilHooks.restoreFilterAfterNearest();
                 } catch (Throwable cleanup) {
                     RenderFailures.suppress(failure, cleanup);
                 }
@@ -241,7 +267,7 @@ public final class RenderLayer implements BlendingStateHolder {
         } finally {
             if (textureId != null && unfilteredAtlas) {
                 try {
-                    TextureUtil.func_147945_b();
+                    TextureUtilHooks.restoreFilterAfterNearest();
                 } catch (Throwable cleanup) {
                     failure = RenderFailures.suppress(failure, cleanup);
                 }

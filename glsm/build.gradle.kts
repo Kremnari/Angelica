@@ -183,6 +183,7 @@ dependencies {
 }
 
 tasks.withType<DowngradeFiles>().configureEach {
+    outputs.cacheIf { true }
     downgradeTo.set(JavaVersion.VERSION_1_8)
     multiReleaseOriginal.set(false)
     multiReleaseVersions.set(emptySet())
@@ -266,6 +267,22 @@ tasks.test {
     configureGlsmJava8()
 }
 
+val redirectAgentJar by tasks.registering(Jar::class) {
+    archiveClassifier = "redirect-agent"
+    manifest {
+        attributes("Premain-Class" to "com.gtnewhorizons.angelica.glsm.GlsmRedirectAgent")
+    }
+}
+
+val redirectAgent by configurations.creating {
+    isCanBeConsumed = true
+    isCanBeResolved = false
+}
+
+artifacts {
+    add(redirectAgent.name, redirectAgentJar)
+}
+
 val glTestTasks = GL_TASK_TAGS.map { (taskName, tag) ->
     tasks.register<Test>(taskName) {
         description = "Runs the $tag GL tests in their own JVM, so they get their own Display and GL profile."
@@ -274,6 +291,7 @@ val glTestTasks = GL_TASK_TAGS.map { (taskName, tag) ->
             includeTags = setOf(tag)
         }
         configureGlsmJava8()
+        javaAgent(files(redirectAgentJar))
     }
 }
 
@@ -302,6 +320,8 @@ val verifyTestsRan by tasks.registering {
 }
 tasks.check { dependsOn(verifyTestsRan) }
 
+val unpackLwjgl3Natives = registerLwjgl3NativesUnpack()
+
 val spirvTest by tasks.registering(Test::class) {
     description = "Runs SpirvShaderTranslator* tests against native shaderc + spvc on Java 21."
     group = "verification"
@@ -320,6 +340,7 @@ val spirvTest by tasks.registering(Test::class) {
     filter {
         includeTestsMatching("com.gtnewhorizons.angelica.glsm.shader.SpirvShaderTranslator*Test")
         includeTestsMatching("com.gtnewhorizons.angelica.glsm.ffp.FFPUniformBlockSpirvLayoutTest")
+        includeTestsMatching("com.gtnewhorizons.angelica.glsm.shader.SpirvCompilerDiskCacheTest")
     }
 
     // libshaderc.so / libspirv-cross.so are extracted by extractNatives3.
@@ -329,6 +350,7 @@ val spirvTest by tasks.registering(Test::class) {
         "-Djava.library.path=${extractNatives3.get().property("destinationFolder").let { (it as DirectoryProperty).asFile.get().path }}",
         "--enable-native-access=ALL-UNNAMED"
     )
+    loadLwjgl3NativesFrom(unpackLwjgl3Natives)
 
     testLogging {
         showStandardStreams = true

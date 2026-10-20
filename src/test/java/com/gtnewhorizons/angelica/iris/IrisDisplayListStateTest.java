@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.iris;
 import com.gtnewhorizons.angelica.glsm.DisplayListManager;
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import com.gtnewhorizons.angelica.glsm.StateSet;
 import com.gtnewhorizons.angelica.glsm.recording.GLCommand;
 import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
@@ -18,6 +19,7 @@ import net.coderbot.iris.pipeline.FixedFunctionWorldRenderingPipeline;
 import net.coderbot.iris.pipeline.PipelineManager;
 import net.coderbot.iris.pipeline.WorldRenderingPipeline;
 import net.coderbot.iris.uniforms.CapturedRenderingState;
+import net.coderbot.iris.uniforms.CapturedStateScope;
 import net.coderbot.iris.uniforms.ItemIdManager;
 import net.coderbot.iris.uniforms.ItemMaterialHelper;
 import net.coderbot.iris.shaderpack.materialmap.NamespacedId;
@@ -33,6 +35,7 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 
 import java.nio.IntBuffer;
 import java.util.ArrayList;
@@ -63,27 +66,10 @@ class IrisDisplayListStateTest {
     }
 
     private int program() {
-        int vertex = shader(GL20.GL_VERTEX_SHADER,
-            "#version 330 core\nvoid main() { gl_Position = vec4(0, 0, 0, 1); }");
-        int fragment = shader(GL20.GL_FRAGMENT_SHADER,
+        int program = GlTestSupport.program(GlTestSupport.TRIVIAL_VS,
             "#version 330 core\nuniform int itemId; out vec4 color; void main() { color = vec4(float(itemId)); }");
-        int program = GLStateManager.glCreateProgram();
         programs.add(program);
-        GLStateManager.glAttachShader(program, vertex);
-        GLStateManager.glAttachShader(program, fragment);
-        GLStateManager.glLinkProgram(program);
-        GLStateManager.glDeleteShader(vertex);
-        GLStateManager.glDeleteShader(fragment);
-        assertEquals(GL11.GL_TRUE, GLStateManager.glGetProgrami(program, GL20.GL_LINK_STATUS));
         return program;
-    }
-
-    private static int shader(int type, String source) {
-        int shader = GLStateManager.glCreateShader(type);
-        GLStateManager.glShaderSource(shader, source);
-        GLStateManager.glCompileShader(shader);
-        assertEquals(GL11.GL_TRUE, GLStateManager.glGetShaderi(shader, GL20.GL_COMPILE_STATUS));
-        return shader;
     }
 
     private void selectProgram() {
@@ -134,6 +120,31 @@ class IrisDisplayListStateTest {
     }
 
     @Test
+    void cutoutDefaultsOutsideListEnableLightmapWithoutSwitchingUnit() {
+        GLStateManager.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
+        try {
+            GLStateManager.enableAlphaTest();
+            GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+            GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
+            GLStateManager.disableTexture();
+            GLStateManager.glActiveTexture(GL13.GL_TEXTURE3);
+            final int d = GLStateManager.pushState(StateSet.CUTOUT);
+            try {
+                final long savedBefore = GLStateManager.attribSlotsSaved;
+                GbufferPrograms.setCutoutDefaults();
+                assertEquals(1, GLStateManager.attribSlotsSaved - savedBefore);
+                assertTrue(GLStateManager.getTextures().getTextureUnitStates(1).isEnabled());
+                assertEquals(3, GLStateManager.getActiveTextureUnit());
+            } finally {
+                GLStateManager.popStateTo(d);
+            }
+            assertFalse(GLStateManager.getTextures().getTextureUnitStates(1).isEnabled());
+        } finally {
+            GLStateManager.glPopAttrib();
+        }
+    }
+
+    @Test
     void nestedBlendScopesRestorePlaybackValuesEvenIfCompileTimePopWasANoop() {
         GLStateManager.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
         try {
@@ -160,6 +171,11 @@ class IrisDisplayListStateTest {
                 try {
                     GLStateManager.glCallList(parent);
                     assertTrue(GLStateManager.isEffectiveBlendEnabled());
+                    assertTrue(GL11.glIsEnabled(GL11.GL_BLEND), "driver blend enable");
+                    assertEquals(GL11.GL_SRC_ALPHA, GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB), "driver blend src rgb");
+                    assertEquals(GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.glGetInteger(GL14.GL_BLEND_DST_RGB), "driver blend dst rgb");
+                    assertEquals(GL11.GL_ZERO, GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA), "driver blend src alpha");
+                    assertEquals(GL11.GL_ONE, GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA), "driver blend dst alpha");
                     final var blend = GLStateManager.getEffectiveBlendState(new com.gtnewhorizons.angelica.glsm.states.BlendState());
                     assertEquals(GL11.GL_SRC_ALPHA, blend.getSrcRgb());
                     assertEquals(GL11.GL_ONE_MINUS_SRC_ALPHA, blend.getDstRgb());
@@ -178,31 +194,24 @@ class IrisDisplayListStateTest {
     @Test
     void idsAndColorReplayInsideNestedScopesAndRestoreThePlaybackCaller() {
         final CapturedRenderingState state = CapturedRenderingState.INSTANCE;
-        state.pushCurrentEntityAndItem();
-        state.pushCurrentBlockEntity();
-        state.pushCurrentEntityColor();
-        try {
+        try (CapturedStateScope ignored = new CapturedStateScope()) {
             for (int mode : new int[] {GL11.GL_COMPILE, GL11.GL_COMPILE_AND_EXECUTE}) {
                 state.setCurrentEntityAndItem(10, 11);
                 state.setCurrentBlockEntity(12);
                 state.setCurrentEntityColor(1, 0, 0, 0.5f);
                 final int child = newList();
                 GLStateManager.glNewList(child, mode);
-                state.pushCurrentEntityAndItem();
-                state.pushCurrentBlockEntity();
-                state.pushCurrentEntityColor();
-                state.setCurrentEntityAndItem(45010, 45011);
-                state.setCurrentBlockEntity(45012);
-                state.setCurrentEntityColor(0, 1, 0, 0.25f);
-                DisplayListManager.recordStateCommand(() -> {
-                    assertEquals(45010, state.getCurrentRenderedEntity());
-                    assertEquals(45011, state.getCurrentRenderedItem());
-                    assertEquals(45012, state.getCurrentRenderedBlockEntity());
-                    assertTrue(state.getCurrentEntityColor().equals(0, 1, 0, 0.25f));
-                });
-                state.popCurrentEntityColor();
-                state.popCurrentBlockEntity();
-                state.popCurrentEntityAndItem();
+                try (CapturedStateScope nestedIgnored = new CapturedStateScope()) {
+                    state.setCurrentEntityAndItem(45010, 45011);
+                    state.setCurrentBlockEntity(45012);
+                    state.setCurrentEntityColor(0, 1, 0, 0.25f);
+                    DisplayListManager.recordStateCommand(() -> {
+                        assertEquals(45010, state.getCurrentRenderedEntity());
+                        assertEquals(45011, state.getCurrentRenderedItem());
+                        assertEquals(45012, state.getCurrentRenderedBlockEntity());
+                        assertTrue(state.getCurrentEntityColor().equals(0, 1, 0, 0.25f));
+                    });
+                }
                 GLStateManager.glEndList();
 
                 final int parent = newList();
@@ -225,20 +234,13 @@ class IrisDisplayListStateTest {
                     assertTrue(state.getCurrentEntityColor().equals(0, 0, 1, 0.75f));
                 }
             }
-        } finally {
-            state.popCurrentEntityColor();
-            state.popCurrentBlockEntity();
-            state.popCurrentEntityAndItem();
         }
     }
 
     @Test
     void explicitStateRecordsEvenWhenUnchangedAndOnlyDeduplicatesAdjacentCommands() {
         final CapturedRenderingState state = CapturedRenderingState.INSTANCE;
-        state.pushCurrentEntityAndItem();
-        state.pushCurrentBlockEntity();
-        state.pushCurrentEntityColor();
-        try {
+        try (CapturedStateScope ignored = new CapturedStateScope()) {
             state.setCurrentEntityAndItem(7, 8);
             state.setCurrentBlockEntity(9);
             state.setCurrentEntityColor(1, 0, 0, 0.5f);
@@ -257,10 +259,6 @@ class IrisDisplayListStateTest {
             assertEquals(8, state.getCurrentRenderedItem());
             assertEquals(9, state.getCurrentRenderedBlockEntity());
             assertTrue(state.getCurrentEntityColor().equals(1, 0, 0, 0.5f));
-        } finally {
-            state.popCurrentEntityColor();
-            state.popCurrentBlockEntity();
-            state.popCurrentEntityAndItem();
         }
     }
 

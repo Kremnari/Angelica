@@ -28,6 +28,7 @@ public final class SamplerBinder {
     private final Device device;
     private final ResourceManager resourceManager;
     private final ShaderManager shaderManager;
+    private final SamplerCache.Factory samplerFactory = this::createSamplerForKey;
 
     public SamplerBinder(Device device, ResourceManager resourceManager, ShaderManager shaderManager) {
         this.device = device;
@@ -42,8 +43,13 @@ public final class SamplerBinder {
     }
 
     public long getSamplerForUnit(ContextState st, int glUnit, int glTexId) {
-        if (glUnit >= 0 && glUnit < st.boundSamplerObjects.length && st.boundSamplerObjects[glUnit] != 0) {
-            final TextureSamplerState ss = resourceManager.getSamplerObject(st.boundSamplerObjects[glUnit]);
+        final int samplerObject = glUnit >= 0 && glUnit < st.boundSamplerObjects.length ? st.boundSamplerObjects[glUnit] : 0;
+        return getSampler(samplerObject, glTexId);
+    }
+
+    public long getSampler(int samplerObject, int glTexId) {
+        if (samplerObject != 0) {
+            final TextureSamplerState ss = resourceManager.getSamplerObject(samplerObject);
             if (ss != null) return getOrCreateSdlSampler(ss);
         }
         if (glTexId != 0) return getSamplerForTexture(glTexId);
@@ -58,7 +64,7 @@ public final class SamplerBinder {
             ss.minLod, ss.maxLod, ss.lodBias,
             ss.maxAnisotropy, ss.compareMode, ss.compareFunc);
 
-        final long handle = resourceManager.samplerCache().getOrCreate(key, this::createSamplerForKey);
+        final long handle = resourceManager.samplerCache().getOrCreate(key, samplerFactory);
         ss.sdlSampler = handle;
         return handle != 0 ? handle : resourceManager.getOrCreateDefaultSampler();
     }
@@ -143,7 +149,7 @@ public final class SamplerBinder {
                 continue;
             }
             final int glUnit = samplerUnits[i];
-            final int glTexId = (glUnit >= 0 && glUnit < st.boundTextures.length) ? st.boundTextures[glUnit] : 0;
+            final int glTexId = st.boundTexture(glUnit);
             long texHandle = (glTexId != 0) ? resourceManager.getTextureHandle(glTexId) : 0;
             if (texHandle == 0) {
                 texHandle = fallbackTexture;

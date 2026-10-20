@@ -8,6 +8,7 @@ import com.gtnewhorizons.angelica.rendering.items.ItemRenderListManager;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrLifecycle;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import net.coderbot.iris.Iris;
+import net.coderbot.iris.uniforms.ItemIdManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.ITextureObject;
 import net.minecraft.client.renderer.texture.TextureMap;
@@ -37,6 +38,7 @@ public final class ImmediateExtendedAttribs implements ImmediateExtendedAttribHa
 
     private static final int WANTS_MID = 1;
     private static final int WANTS_TANGENT = 2;
+    private static final int WANTS_ENTITY_IDS = 4;
 
     private static final int NEUTRAL_TANGENT = NormI8.pack(1.0f, 0.0f, 0.0f, 1.0f);
 
@@ -56,6 +58,7 @@ public final class ImmediateExtendedAttribs implements ImmediateExtendedAttribHa
             wants = 0;
             if (GLStateManager.glGetAttribLocation(program, "mc_midTexCoord") >= 0) wants |= WANTS_MID;
             if (GLStateManager.glGetAttribLocation(program, "at_tangent") >= 0) wants |= WANTS_TANGENT;
+            if (GLStateManager.glGetAttribLocation(program, "iris_Entity") == LOC_ENTITY_IDS) wants |= WANTS_ENTITY_IDS;
             programWantsExtCache.put(program, wants);
         }
         currentProgramWants = wants;
@@ -82,8 +85,7 @@ public final class ImmediateExtendedAttribs implements ImmediateExtendedAttribHa
 
     @Override
     public boolean wantsExtended() {
-        GLSMHooks.resolvePendingProgram();
-        return Iris.enabled && currentProgramWants != 0 && GLStateManager.getActiveProgram() != 0;
+        return programWants(WANTS_MID | WANTS_TANGENT);
     }
 
     @Override
@@ -92,8 +94,36 @@ public final class ImmediateExtendedAttribs implements ImmediateExtendedAttribHa
     }
 
     @Override
+    public boolean wantsEntityIds() {
+        return programWants(WANTS_ENTITY_IDS);
+    }
+
+    private static boolean programWants(int mask) {
+        if (!Iris.enabled) return false;
+        GLSMHooks.resolvePendingProgram();
+        return (currentProgramWants & mask) != 0 && GLStateManager.getActiveProgram() != 0;
+    }
+
+    @Override
     public boolean wantsExtendedCapture() {
         return Iris.enabled && Iris.getCurrentPack().isPresent();
+    }
+
+    @Override
+    public boolean wantsFaceNormals() {
+        return ItemIdManager.isWorldRenderActive();
+    }
+
+    @Override
+    public void writeFaceNormals(int[] rawBuffer, int vertexCount) {
+        for (int v = 0; v < vertexCount; v += 4) {
+            quad.setup(rawBuffer, v, RAW_NORMAL_INDEX);
+            NormalHelper.computeFaceNormal(normal, quad);
+            final int packed = NormI8.pack(normal.x, normal.y, normal.z, 0.0f);
+            for (int i = 0; i < 4; i++) {
+                rawBuffer[(v + i) * VERTEX_SIZE + RAW_NORMAL_INDEX] = packed;
+            }
+        }
     }
 
     @Override

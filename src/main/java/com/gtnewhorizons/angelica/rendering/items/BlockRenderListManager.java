@@ -5,6 +5,7 @@ import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.RenderBlocks;
 import net.minecraft.client.resources.IReloadableResourceManager;
 import org.lwjgl.opengl.GL11;
 
@@ -41,20 +42,43 @@ public class BlockRenderListManager {
         return itemFrameDisplayLists[variant];
     }
 
-    public static int startCompiling() {
+    public static boolean rendersPlainItem(RenderBlocks rb, Block block, float brightness) {
+        return !isISBRH(block.getRenderType()) && !rb.enableAO && rb.overrideBlockTexture == null && brightness == 1.0F && rb.useInventoryTint
+            && rb.blockAccess == null && (rb.uvRotateEast | rb.uvRotateWest | rb.uvRotateSouth | rb.uvRotateNorth | rb.uvRotateTop | rb.uvRotateBottom) == 0;
+    }
+
+    public static int callOrStartCompiling(int cached) {
+        if (cached != 0) {
+            GLStateManager.glCallList(cached);
+            return -1;
+        }
+        return startCompiling();
+    }
+
+    private static int startCompiling() {
         final int list = GLStateManager.glGenLists(1);
         GLStateManager.glNewList(list, GL11.GL_COMPILE);
         return list;
     }
 
     public static void endCompiling(int list, Block block, int meta) {
+        if (list <= 0) return;
         finishCompiling();
         displayListMap.put(new BlockMeta(block, meta), list);
+        GLStateManager.glCallList(list);
     }
 
     public static void endItemFrameCompiling(int list, int variant) {
+        if (list <= 0) return;
         finishCompiling();
         itemFrameDisplayLists[variant] = list;
+        GLStateManager.glCallList(list);
+    }
+
+    public static void abortCompiling(int list) {
+        if (list <= 0) return;
+        finishCompiling();
+        GLStateManager.glDeleteLists(list, 1);
     }
 
     private static void finishCompiling() {

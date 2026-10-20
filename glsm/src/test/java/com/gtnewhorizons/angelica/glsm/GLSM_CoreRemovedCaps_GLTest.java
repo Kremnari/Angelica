@@ -76,7 +76,6 @@ public class GLSM_CoreRemovedCaps_GLTest {
             assertFalse(GLStateManager.glIsEnabled(cap));
         } finally {
             GLStateManager.glDisable(cap);
-            while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
         }
     }
 
@@ -91,21 +90,6 @@ public class GLSM_CoreRemovedCaps_GLTest {
             assertFalse(GLStateManager.glIsEnabled(cap));
         } finally {
             GLStateManager.glDisable(cap);
-            while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
-        }
-    }
-
-    @Test
-    void secondaryColorIsCacheOnly() {
-        try {
-            // Calling through to the driver here aborts the JVM in a core profile - the color sum is emulated by the FFP shaders
-            GLStateManager.glSecondaryColor3f(0.25F, 0.5F, 0.75F);
-            assertNoGlError("glSecondaryColor3f");
-
-            assertSecondaryColor(0.25F, 0.5F, 0.75F);
-        } finally {
-            GLStateManager.glSecondaryColor3f(0.0F, 0.0F, 0.0F);
-            while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
         }
     }
 
@@ -121,7 +105,6 @@ public class GLSM_CoreRemovedCaps_GLTest {
             assertSecondaryColor(0.125F, 0.25F, 0.375F);
         } finally {
             GLStateManager.glSecondaryColor3f(0.0F, 0.0F, 0.0F);
-            while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
         }
     }
 
@@ -135,7 +118,6 @@ public class GLSM_CoreRemovedCaps_GLTest {
             assertFalse(GLStateManager.glIsEnabled(GL14.GL_COLOR_SUM));
         } finally {
             GLStateManager.glDisable(GL14.GL_COLOR_SUM);
-            while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
         }
     }
 
@@ -156,7 +138,6 @@ public class GLSM_CoreRemovedCaps_GLTest {
         } finally {
             GLStateManager.glDeleteLists(list, 1);
             GLStateManager.glSecondaryColor3f(0.0F, 0.0F, 0.0F);
-            while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
         }
     }
 
@@ -176,7 +157,6 @@ public class GLSM_CoreRemovedCaps_GLTest {
         } finally {
             GLStateManager.glDeleteLists(list, 1);
             GLStateManager.glDisable(GL11.GL_LINE_STIPPLE);
-            while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
         }
     }
 }

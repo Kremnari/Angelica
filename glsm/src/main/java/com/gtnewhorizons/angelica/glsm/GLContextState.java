@@ -21,6 +21,7 @@ import com.gtnewhorizons.angelica.glsm.stacks.MaterialStateStack;
 import com.gtnewhorizons.angelica.glsm.stacks.MatrixModeStack;
 import com.gtnewhorizons.angelica.glsm.stacks.PointStateStack;
 import com.gtnewhorizons.angelica.glsm.stacks.PolygonStateStack;
+import com.gtnewhorizons.angelica.glsm.stacks.RetainedState;
 import com.gtnewhorizons.angelica.glsm.stacks.ScissorStateStack;
 import com.gtnewhorizons.angelica.glsm.stacks.StackIdAllocator;
 import com.gtnewhorizons.angelica.glsm.stacks.StencilStateStack;
@@ -29,10 +30,11 @@ import com.gtnewhorizons.angelica.glsm.states.AlphaState;
 import com.gtnewhorizons.angelica.glsm.states.BlendState;
 import com.gtnewhorizons.angelica.glsm.states.ClipPlaneState;
 import com.gtnewhorizons.angelica.glsm.states.Color4;
-import com.gtnewhorizons.angelica.glsm.states.PixelUnpackState;
+import com.gtnewhorizons.angelica.glsm.states.PixelStoreState;
 import com.gtnewhorizons.angelica.glsm.states.ImageUnitArray;
 import com.gtnewhorizons.angelica.glsm.states.SamplerUnitArray;
 import com.gtnewhorizons.angelica.glsm.states.TextureUnitArray;
+import com.gtnewhorizons.angelica.glsm.ffp.InstancedAttribs;
 import com.gtnewhorizons.angelica.glsm.ffp.Instancing;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 import com.gtnewhorizons.angelica.glsm.ffp.VAOManager;
@@ -46,6 +48,7 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
+import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 
 import java.nio.DoubleBuffer;
@@ -102,11 +105,22 @@ public class GLContextState {
     public boolean dirtyNormalAttrib;
     public boolean dirtyTexCoordAttrib;
     public boolean dirtyLightmapAttrib = true;
+    public long entityIds = InstancedAttribs.DEFAULT_ENTITY_IDS;
+    public boolean dirtyEntityIdsAttrib = true;
     public boolean unit23TexCoordSetDuringDraw = false;
     public int maxBoundTextureUnit = 0;
     public int maxBoundImageUnit = 0;
     public final StateSet[] attribSets = new StateSet[GLStateManager.MAX_ATTRIB_STACK_DEPTH];
+    public RetainedState retainedOwner;
     public int attribDepth = 0;
+
+    public boolean savesState(int id) {
+        for (int i = attribDepth - 1; i >= 0; i--) {
+            if (attribSets[i].contains(id)) return true;
+        }
+        return false;
+    }
+
     public int batchStateGeneration;
     public final int[] savedBatchStateGen = new int[GLStateManager.MAX_ATTRIB_STACK_DEPTH];
     public CowStateStack<?>[] stackById;
@@ -159,6 +173,9 @@ public class GLContextState {
     public final BooleanStateStack lineSmoothState = track(new BooleanStateStack(GL11.GL_LINE_SMOOTH));
     public final BooleanStateStack lineStippleState = track(new BooleanStateStack(GL11.GL_LINE_STIPPLE, false, true));
     public final BooleanStateStack pointSmoothState = track(new BooleanStateStack(GL11.GL_POINT_SMOOTH, false, true));
+    public final BooleanStateStack pointSpriteState = track(new BooleanStateStack(GL20.GL_POINT_SPRITE, false, true));
+    public final BooleanStateStack vertexProgramTwoSideState = track(new BooleanStateStack(GL20.GL_VERTEX_PROGRAM_TWO_SIDE, false, true));
+    public final BooleanStateStack edgeFlagState = track(new BooleanStateStack(GL11.GL_EDGE_FLAG, true, true));
     public final BooleanStateStack polygonSmoothState = track(new BooleanStateStack(GL11.GL_POLYGON_SMOOTH));
     public final BooleanStateStack polygonStippleState = track(new BooleanStateStack(GL11.GL_POLYGON_STIPPLE, false, true));
     public final BooleanStateStack multisampleState = track(new BooleanStateStack(GL13.GL_MULTISAMPLE, true));
@@ -172,6 +189,7 @@ public class GLContextState {
     public final BooleanStateStack polygonOffsetFillState = track(new BooleanStateStack(GL11.GL_POLYGON_OFFSET_FILL));
     public final LineStateStack lineState = member(new LineStateStack(StackIdAllocator.nextId()));
     public final PointStateStack pointState = member(new PointStateStack(StackIdAllocator.nextId()));
+    public final IntegerStateStack hintState = member(new IntegerStateStack(0, StackIdAllocator.nextId()).restoreBit(StateSet.R_HINT));
     public final PolygonStateStack polygonState = member(new PolygonStateStack(StackIdAllocator.nextId()));
     public final StencilStateStack stencilState = member(new StencilStateStack(StackIdAllocator.nextId()));
     public int stencilBitMask = 0xFFFFFFFF;
@@ -221,9 +239,16 @@ public class GLContextState {
     public int boundCopyReadBuffer;
     public int boundCopyWriteBuffer;
     public final Int2IntMap boundOtherBuffers = new Int2IntOpenHashMap();
-    public PixelUnpackState pixelUnpackState = PixelUnpackState.DEFAULT;
-    public final int[] clientAttribSavedTextureUnit = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
-    public final int[] clientAttribSavedVertexFlags = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
+    public final int[] uniformBufferBindings = new int[GLStateManager.INDEXED_BUFFER_SLOTS];
+    public final int[] storageBufferBindings = new int[GLStateManager.INDEXED_BUFFER_SLOTS];
+    public PixelStoreState pixelUnpackState = PixelStoreState.DEFAULT;
+    public PixelStoreState pixelPackState = PixelStoreState.DEFAULT;
+    public final int[] clientAttribSavedMask = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
+    public final PixelStoreState[] clientAttribSavedPixelUnpack = new PixelStoreState[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
+    public final PixelStoreState[] clientAttribSavedPixelPack = new PixelStoreState[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
+    public final int[] clientAttribSavedUnpackBuffer = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
+    public final int[] clientAttribSavedPackBuffer = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
+    public final VAOManager.ClientArrays[] clientAttribSavedArrays = new VAOManager.ClientArrays[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
     public int clientAttribStackPointer = 0;
     public int restoreChangedMask;
     public long restoreUnitChangedMask;
@@ -242,7 +267,10 @@ public class GLContextState {
     public int internalGlDepth;
     public int internalDrawDepth;
     public int savedFilterTextureId;
-    public boolean wideLineEmulationActive = false;
+    public int savedFilterMin = -1;
+    public int savedFilterMag = -1;
+    public float savedFilterAniso = -1.0f;
+    public boolean lineQuadsActive = false;
     public boolean lineStippleActive = false;
     public Instancing ffpInstancing = Instancing.NONE;
     public float lastBrightnessX;

@@ -143,6 +143,7 @@ public class GLSMRedirector {
     private static final String OpenGlHelper = "net/minecraft/client/renderer/OpenGlHelper";
     private static final String EXTBlendFunc = "org/lwjgl/opengl/EXTBlendFuncSeparate";
     private static final String EXTSecondaryColor = "org/lwjgl/opengl/EXTSecondaryColor";
+    private static final String EXTFogCoord = "org/lwjgl/opengl/EXTFogCoord";
     private static final String ARBMultiTexture = "org/lwjgl/opengl/ARBMultitexture";
     private static final String ARBShaderObjects = "org/lwjgl/opengl/ARBShaderObjects";
     private static final String ARBInstancedArrays = "org/lwjgl/opengl/ARBInstancedArrays";
@@ -176,6 +177,7 @@ public class GLSMRedirector {
     private static final Map<Integer, String> glCapRedirects = new HashMap<>();
     private static final Map<String, String> typeRedirects = new HashMap<>();
     private static final ClassConstantPoolParser cstPoolParser;
+    private static final String[] CONSTANT_POOL_SEARCH_STRINGS;
 
     private static final String[] CORE_EXCLUSIONS = {
         "org.lwjgl",
@@ -377,6 +379,8 @@ public class GLSMRedirector {
             .add("glEnableClientState")
             .add("glDisableClientState")
             .add("glInterleavedArrays")
+            .add("glEdgeFlagPointer")
+            .add("glGetPointer")
             .add("glPushClientAttrib")
             .add("glPopClientAttrib")
             .add("glViewport")
@@ -407,11 +411,16 @@ public class GLSMRedirector {
             .add("glMultiDrawArrays")
             .add("glPointParameterf")
             .add("glPointParameteri")
+            .add("glPointParameter")
+            .add("glPointParameterfv", "glPointParameter")
+            .add("glPointParameteriv", "glPointParameter")
             // Removed in core profile - emulated by the FFP shaders, calling through would abort the JVM
             .add("glSecondaryColor3f")
             .add("glSecondaryColor3d")
             .add("glSecondaryColor3b")
-            .add("glSecondaryColor3ub");
+            .add("glSecondaryColor3ub")
+            .add("glSecondaryColorPointer")
+            .add("glFogCoordPointer");
         final var gl15 = RedirectMap.newMap()
             .add("glGenBuffers")
             .add("glBindBuffer")
@@ -603,7 +612,9 @@ public class GLSMRedirector {
             .add("glSecondaryColor3bEXT", "glSecondaryColor3b")
             .add("glSecondaryColor3fEXT", "glSecondaryColor3f")
             .add("glSecondaryColor3dEXT", "glSecondaryColor3d")
-            .add("glSecondaryColor3ubEXT", "glSecondaryColor3ub"));
+            .add("glSecondaryColor3ubEXT", "glSecondaryColor3ub")
+            .add("glSecondaryColorPointerEXT", "glSecondaryColorPointer"));
+        methodRedirects.put(EXTFogCoord, RedirectMap.newMap().add("glFogCoordPointerEXT", "glFogCoordPointer"));
 
         // ARB
         methodRedirects.put(ARBMultiTexture, RedirectMap.newMap()
@@ -625,6 +636,7 @@ public class GLSMRedirector {
             .add("glGenRenderbuffers")
             .add("glRenderbufferStorage")
             .add("glFramebufferRenderbuffer")
+            .add("glGenerateMipmap")
         );
         methodRedirects.put(EXTFramebufferObject, RedirectMap.newMap()
             .add("glBindFramebufferEXT", "glBindFramebuffer")
@@ -637,6 +649,7 @@ public class GLSMRedirector {
             .add("glGenRenderbuffersEXT", "glGenRenderbuffers")
             .add("glRenderbufferStorageEXT", "glRenderbufferStorage")
             .add("glFramebufferRenderbufferEXT", "glFramebufferRenderbuffer")
+            .add("glGenerateMipmapEXT", "glGenerateMipmap")
         );
         methodRedirects.put(ARBOcclusionQuery, RedirectMap.newMap()
             .add("glGenQueriesARB", "glGenQueries")
@@ -826,11 +839,16 @@ public class GLSMRedirector {
         stringsToSearch.add(Display);
         stringsToSearch.addAll(typeRedirects.keySet());
         stringsToSearch.addAll(methodRedirects.keySet());
-        cstPoolParser = new ClassConstantPoolParser(stringsToSearch.toArray(new String[0]));
+        CONSTANT_POOL_SEARCH_STRINGS = stringsToSearch.toArray(new String[0]);
+        cstPoolParser = new ClassConstantPoolParser(CONSTANT_POOL_SEARCH_STRINGS);
     }
 
     public String[] getCoreExclusions() {
         return CORE_EXCLUSIONS.clone();
+    }
+
+    public String[] getConstantPoolSearchStrings() {
+        return CONSTANT_POOL_SEARCH_STRINGS.clone();
     }
 
     public static String getGLPrefix() { return GL_PREFIX; }

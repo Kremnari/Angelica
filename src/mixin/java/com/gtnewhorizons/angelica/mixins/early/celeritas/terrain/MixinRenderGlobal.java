@@ -4,6 +4,7 @@ import com.gtnewhorizons.angelica.client.rendering.AngelicaFogService;
 import com.gtnewhorizons.angelica.compat.mojang.Camera;
 import com.gtnewhorizons.angelica.compat.mojang.GameModeUtil;
 import com.gtnewhorizons.angelica.event.RenderChunkEvent;
+import com.gtnewhorizons.angelica.experimental.surround.Surround;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.mixins.interfaces.IRenderGlobalExt;
@@ -14,6 +15,7 @@ import com.gtnewhorizons.angelica.rendering.celeritas.CeleritasSetup;
 import com.gtnewhorizons.angelica.rendering.celeritas.CeleritasWorldRenderer;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrBatchRenderer;
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import net.coderbot.iris.Iris;
 import net.coderbot.iris.layer.GbufferPrograms;
 import net.coderbot.iris.pipeline.HandRenderer;
@@ -30,6 +32,7 @@ import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.tileentity.TileEntity;
 import org.embeddedt.embeddium.impl.gl.device.RenderDevice;
 import org.embeddedt.embeddium.impl.render.terrain.SimpleWorldRenderer;
 import org.embeddedt.embeddium.impl.render.viewport.Viewport;
@@ -48,6 +51,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import java.util.Collections;
+import java.util.List;
 
 import static org.joml.Math.lerp;
 
@@ -61,6 +66,7 @@ public class MixinRenderGlobal implements IRenderGlobalExt {
     @Unique private static final Tracy.ZoneId Z_MT_QUEUE = Tracy.zoneId("mtQueue", Tracy.COLOR_TERRAIN);
 
     @Shadow public Minecraft mc;
+    @Shadow public WorldClient theWorld;
     @Shadow @Final private TextureManager renderEngine;
 
     @Unique private static final String SECTION_SOLID = "draw_chunk_layer_solid";
@@ -138,7 +144,7 @@ public class MixinRenderGlobal implements IRenderGlobalExt {
         } else {
             pipeline = Iris.getPipelineManager().getPipelineNullable();
             if (pass == 0) {
-                pipeline.setPhase(WorldRenderingPhase.TERRAIN_CUTOUT);
+                pipeline.setPhase(WorldRenderingPhase.TERRAIN_SOLID);
             } else if (pass == 1) {
                 if (!ShadowRenderingState.areShadowsCurrentlyBeingRendered()) {
                     iris$beginTranslucents(pipeline, Camera.INSTANCE);
@@ -173,8 +179,10 @@ public class MixinRenderGlobal implements IRenderGlobalExt {
         try {
             if (pass == 0) {
                 mc.mcProfiler.endStartSection(shadow ? SECTION_SHADOW_SOLID : SECTION_SOLID);
+                iris$setTerrainPhase(pipeline, WorldRenderingPhase.TERRAIN_SOLID);
                 this.celeritas$renderer.drawChunkLayer(BlockRenderLayer.SOLID, camX, camY, camZ);
                 mc.mcProfiler.endStartSection(shadow ? SECTION_SHADOW_CUTOUT_MIPPED : SECTION_CUTOUT_MIPPED);
+                iris$setTerrainPhase(pipeline, WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED);
                 this.celeritas$renderer.drawChunkLayer(BlockRenderLayer.CUTOUT_MIPPED, camX, camY, camZ);
             } else {
                 mc.mcProfiler.endStartSection(shadow ? SECTION_SHADOW_TRANSLUCENT : SECTION_TRANSLUCENT);
@@ -257,13 +265,18 @@ public class MixinRenderGlobal implements IRenderGlobalExt {
 
     @Inject(method = "loadRenderers", at = @At("RETURN"))
     private void onReload(CallbackInfo ci) {
+        if (this.celeritas$renderer.getWorld() != this.theWorld) return;
         angelica$reload();
     }
 
 
 
-    @Inject(method = "renderEntities", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderHelper;enableStandardItemLighting()V", shift = At.Shift.AFTER, ordinal = 0), cancellable = true)
-    public void celeritas$renderTileEntities(EntityLivingBase entity, ICamera camera, float partialTicks, CallbackInfo ci) {
+    @Surround(method = "renderEntities", id = "blockEntities",
+        at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderHelper;enableStandardItemLighting()V", ordinal = 0))
+    private void celeritas$enterBlockEntities() {}
+
+    @Surround.Return("blockEntities")
+    private void celeritas$renderTileEntities(@Surround.Local(argsOnly = true) float partialTicks) {
         if (Iris.enabled) {
             GbufferPrograms.beginBlockEntities();
             GbufferPrograms.setBlockEntityDefaults();
@@ -273,9 +286,11 @@ public class MixinRenderGlobal implements IRenderGlobalExt {
         if (Iris.enabled) {
             GbufferPrograms.endBlockEntities();
         }
-        this.mc.entityRenderer.disableLightmap(partialTicks);
-        this.mc.mcProfiler.endSection();
-        ci.cancel();
+    }
+
+    @ModifyExpressionValue(method = "renderEntities", at = @At(value = "FIELD", target = "Lnet/minecraft/client/renderer/RenderGlobal;tileEntities:Ljava/util/List;", opcode = Opcodes.GETFIELD))
+    private List<TileEntity> celeritas$skipVanillaTileEntities(List<TileEntity> original) {
+        return Collections.emptyList();
     }
 
     /**
@@ -321,6 +336,13 @@ public class MixinRenderGlobal implements IRenderGlobalExt {
 
         AngelicaRenderQueue.recordFrameStats(tasksRan, System.nanoTime() - startTime, longestTaskNs);
         return true;
+    }
+
+    @Unique
+    private static void iris$setTerrainPhase(WorldRenderingPipeline pipeline, WorldRenderingPhase phase) {
+        if (pipeline != null) {
+            pipeline.setPhase(phase);
+        }
     }
 
     @Unique

@@ -28,6 +28,7 @@ import org.lwjgl.opengl.GL31C;
 import org.lwjgl.opengl.GL32C;
 import org.lwjgl.opengl.GL33C;
 import org.lwjgl.opengl.GL40C;
+import org.lwjgl.opengl.GL41C;
 import org.lwjgl.opengl.GL42C;
 import org.lwjgl.opengl.GL43C;
 import org.lwjgl.opengl.GL44C;
@@ -450,6 +451,7 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
 
     @Override
     public void hint(int target, int mode) {
+        if (RenderSystem.isGLES() && target != GL20C.GL_FRAGMENT_SHADER_DERIVATIVE_HINT) return;
         GL11C.glHint(target, mode);
     }
 
@@ -966,6 +968,27 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
     }
 
     @Override
+    public boolean supportsProgramBinary() {
+        return !RenderSystem.isGLES() && (caps.OpenGL41 || caps.GL_ARB_get_program_binary)
+            && GL11C.glGetInteger(GL41C.GL_NUM_PROGRAM_BINARY_FORMATS) > 0;
+    }
+
+    @Override
+    public void programParameteri(int program, int pname, int value) {
+        GL41C.glProgramParameteri(program, pname, value);
+    }
+
+    @Override
+    public void getProgramBinary(int program, IntBuffer length, IntBuffer binaryFormat, ByteBuffer binary) {
+        GL41C.glGetProgramBinary(program, length, binaryFormat, binary);
+    }
+
+    @Override
+    public void programBinary(int program, int binaryFormat, ByteBuffer binary) {
+        GL41C.glProgramBinary(program, binaryFormat, binary);
+    }
+
+    @Override
     public void validateProgram(int program) {
         GL20C.glValidateProgram(program);
     }
@@ -1450,31 +1473,6 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
     }
 
     @Override
-    public void textureStorage2D(int texture, int levels, int internalFormat, int width, int height) {
-        GL45C.glTextureStorage2D(texture, levels, internalFormat, width, height);
-    }
-
-    @Override
-    public void texStorage1D(int target, int levels, int internalFormat, int width) {
-        GL42C.glTexStorage1D(target, levels, internalFormat, width);
-    }
-
-    @Override
-    public void texStorage3D(int target, int levels, int internalFormat, int width, int height, int depth) {
-        GL42C.glTexStorage3D(target, levels, internalFormat, width, height, depth);
-    }
-
-    @Override
-    public void textureStorage1D(int texture, int levels, int internalFormat, int width) {
-        GL45C.glTextureStorage1D(texture, levels, internalFormat, width);
-    }
-
-    @Override
-    public void textureStorage3D(int texture, int levels, int internalFormat, int width, int height, int depth) {
-        GL45C.glTextureStorage3D(texture, levels, internalFormat, width, height, depth);
-    }
-
-    @Override
     public void generateTextureMipmap(int texture) {
         GL45C.glGenerateTextureMipmap(texture);
     }
@@ -1825,11 +1823,13 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
 
     @Override
     public void pointParameterf(int pname, float param) {
+        if (RenderSystem.isGLES()) return;
         GL14C.glPointParameterf(pname, param);
     }
 
     @Override
     public void pointParameteri(int pname, int param) {
+        if (RenderSystem.isGLES()) return;
         GL14C.glPointParameteri(pname, param);
     }
 

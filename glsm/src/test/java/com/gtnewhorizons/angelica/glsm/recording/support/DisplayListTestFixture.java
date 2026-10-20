@@ -8,6 +8,7 @@ import com.gtnewhorizons.angelica.glsm.GLTypes;
 import com.gtnewhorizons.angelica.glsm.recording.CompiledDisplayList;
 import com.gtnewhorizons.angelica.glsm.recording.commands.BatchedIndexedDrawCmd;
 import com.gtnewhorizons.angelica.glsm.recording.commands.IndexedDrawBatch;
+import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import org.junit.jupiter.api.AfterEach;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
@@ -147,6 +148,19 @@ public abstract class DisplayListTestFixture {
         return list;
     }
 
+    protected final int recordTwoVaoDraws(int firstVao, int secondVao, int ebo) {
+        final int list = newList();
+        GLStateManager.glNewList(list, GL11.GL_COMPILE);
+        for (int vao : new int[] { firstVao, secondVao }) {
+            GLStateManager.glBindVertexArray(vao);
+            GLStateManager.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, ebo);
+            GLStateManager.glDrawElements(GL11.GL_TRIANGLES, 3, GL11.GL_UNSIGNED_SHORT, 0L);
+        }
+        GLStateManager.glBindVertexArray(0);
+        GLStateManager.glEndList();
+        return list;
+    }
+
     protected static CompiledDisplayList compiledOf(int listId) {
         final CompiledDisplayList compiled = DisplayListManager.getDisplayList(listId);
         assertNotNull(compiled, "compiled display list must exist for id " + listId);
@@ -174,6 +188,19 @@ public abstract class DisplayListTestFixture {
 
     protected static IndexedDrawBatch firstBatch(int listId) {
         return batchesOf(listId).getFirst();
+    }
+
+    protected static void replay(int listId) {
+        compiledOf(listId).render();
+        GLStateManager.glBindVertexArray(0);
+    }
+
+    protected static IndexedDrawBatch batchOf(BatchedIndexedDrawCmd cmd) {
+        return Reflect.get(cmd, "batch");
+    }
+
+    protected static int vaoOf(IndexedDrawBatch batch) {
+        return Reflect.<Integer>get(batch, "vao");
     }
 
     protected static ByteBuffer readBufferBytes(int target, int bufferId, int size) {

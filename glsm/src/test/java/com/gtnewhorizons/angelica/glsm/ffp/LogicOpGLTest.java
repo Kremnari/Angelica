@@ -17,8 +17,7 @@ class LogicOpGLTest {
     @BeforeEach
     void setUp() {
         FfpFixture.resetFfpState();
-        ShaderManager.enable();
-        ShaderManager.getInstance().activate();
+        FfpFixture.activateFfp();
         GLStateManager.glViewport(0, 0, SIZE, SIZE);
         GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
         GLStateManager.glLoadIdentity();
@@ -36,7 +35,6 @@ class LogicOpGLTest {
         GLStateManager.glDisable(GL11.GL_BLEND);
         LogicOpFixture.deleteResources();
         FfpFixture.resetFfpState();
-        while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
     }
 
     @Test
@@ -48,7 +46,6 @@ class LogicOpGLTest {
                 assertRgb(op, src);
             }
         }
-        assertEquals(GL11.GL_NO_ERROR, GL11.glGetError());
     }
 
     @Test

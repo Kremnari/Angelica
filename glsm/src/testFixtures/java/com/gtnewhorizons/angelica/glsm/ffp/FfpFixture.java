@@ -1,26 +1,24 @@
 package com.gtnewhorizons.angelica.glsm.ffp;
 
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
-import org.lwjgl.opengl.GL20;
 
 import java.nio.ByteBuffer;
 import java.util.function.IntFunction;
 
 import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memAddress0;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 public final class FfpFixture {
 
     private FfpFixture() {}
 
-    public static final class IntegerInstances {
+    public static final class EntityIdInstances {
 
         private static final int INSTANCES = 3;
 
@@ -30,16 +28,17 @@ public final class FfpFixture {
             layout(location = 5) in vec4 a_InstRow0;
             layout(location = 6) in vec4 a_InstRow1;
             layout(location = 7) in vec4 a_InstRow2;
-            layout(location = 11) in uvec4 iris_Entity;
+            layout(location = 11) in vec4 iris_InstEntity;
             flat out vec3 v_Color;
             void main() {
             """;
 
         private static final String VS_TAIL = """
               gl_Position = instMV * vec4(a_Position, 1.0);
-              if (iris_Entity.x == 65535u) { v_Color = vec3(1.0, 0.0, 0.0); }
-              else if (iris_Entity.x == 7u) { v_Color = vec3(0.0, 1.0, 0.0); }
-              else if (iris_Entity.x == 50020u) { v_Color = vec3(0.0, 0.0, 1.0); }
+              int entity = int(round(iris_InstEntity.x * 65535.0));
+              if (entity == 65535) { v_Color = vec3(1.0, 0.0, 0.0); }
+              else if (entity == 7) { v_Color = vec3(0.0, 1.0, 0.0); }
+              else if (entity == 50020) { v_Color = vec3(0.0, 0.0, 1.0); }
               else { v_Color = vec3(1.0, 0.0, 1.0); }
             }
             """;
@@ -58,7 +57,7 @@ public final class FfpFixture {
         private static int templateVbo;
         private static int instanceVbo;
 
-        private IntegerInstances() {}
+        private EntityIdInstances() {}
 
         public static void build(float spacing) {
             program = buildProgram();
@@ -125,26 +124,7 @@ public final class FfpFixture {
         }
 
         private static int buildProgram() {
-            final int vs = compile(GL20.GL_VERTEX_SHADER, VS);
-            final int fs = compile(GL20.GL_FRAGMENT_SHADER, FS);
-            final int p = GLStateManager.glCreateProgram();
-            GLStateManager.glAttachShader(p, vs);
-            GLStateManager.glAttachShader(p, fs);
-            GLStateManager.glLinkProgram(p);
-            assertNotEquals(0, GLStateManager.glGetProgrami(p, GL20.GL_LINK_STATUS), () -> "test program must link: " + GLStateManager.glGetProgramInfoLog(p, 4096));
-            GLStateManager.glDeleteShader(vs);
-            GLStateManager.glDeleteShader(fs);
-            return p;
-        }
-
-        private static int compile(int type, String source) {
-            final int shader = GLStateManager.glCreateShader(type);
-            GLStateManager.glShaderSource(shader, source);
-            GLStateManager.glCompileShader(shader);
-            if (GLStateManager.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == 0) {
-                fail("test shader failed to compile:\n" + GLStateManager.glGetShaderInfoLog(shader, 4096) + "\n\n" + source);
-            }
-            return shader;
+            return GlTestSupport.program(VS, FS);
         }
     }
 
@@ -242,6 +222,11 @@ public final class FfpFixture {
         }
         final int coveredPixels = covered;
         assertTrue(coveredPixels > base.length / 8, "base draw covered only " + coveredPixels + " of " + base.length + " pixels");
+    }
+
+    public static void activateFfp() {
+        ShaderManager.enable();
+        ShaderManager.getInstance().activate();
     }
 
     public static void resetFfpState() {

@@ -30,13 +30,7 @@ public class GLSM_SplashCachingCoverage_UnitTest {
     void leaveSplashWindow() throws IllegalAccessException {
         SplashWindow.leave();
         GLStateManager.glDepthFunc(GL11.GL_LESS);
-    }
-
-    @Test
-    void depthFuncSetDuringSplashLandsInCache() {
-        GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
-
-        assertEquals(GL11.GL_LEQUAL, GLStateManager.getDepthState().getFunc(), "cache write dropped while caching=false");
+        GLStateManager.glCullFace(GL11.GL_BACK);
     }
 
     @Test
@@ -50,6 +44,7 @@ public class GLSM_SplashCachingCoverage_UnitTest {
         GLStateManager.glPopAttrib();
 
         assertEquals(GL11.GL_LEQUAL, GLStateManager.getDepthState().getFunc(), "popAttrib reverted to the stale default");
+        assertEquals(GL11.GL_LEQUAL, GL11.glGetInteger(GL11.GL_DEPTH_FUNC));
     }
 
     @Test
@@ -84,6 +79,8 @@ public class GLSM_SplashCachingCoverage_UnitTest {
     void replayPushesCachedStateWithoutDisturbingIt() {
         GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
         GLStateManager.glCullFace(GL11.GL_FRONT);
+        assertEquals(GL11.GL_LEQUAL, GLStateManager.getDepthState().getFunc(), "cache write dropped while caching=false");
+        assertEquals(GL11.GL_FRONT, GLStateManager.getPolygonState().getCullFaceMode(), "cache write dropped while caching=false");
 
         GLStateManager.replayStateToBackend();
 
@@ -136,12 +133,5 @@ public class GLSM_SplashCachingCoverage_UnitTest {
         assertTrue(GLStateManager.takeStateSeedPending(), "end of splash must request a state seed");
         assertFalse(GLStateManager.takeStateSeedPending(), "seed must be consumed exactly once, not once per frame");
         assertFalse(GLStateManager.takeStateSeedPending(), "seed must stay consumed");
-    }
-
-    @Test
-    void cullFaceSetDuringSplashLandsInCache() {
-        GLStateManager.glCullFace(GL11.GL_FRONT);
-
-        assertEquals(GL11.GL_FRONT, GLStateManager.getPolygonState().getCullFaceMode(), "cache write dropped while caching=false");
     }
 }

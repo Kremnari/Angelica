@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableSet;
 import com.gtnewhorizons.angelica.glsm.DisplayListManager;
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
 import com.gtnewhorizons.angelica.glsm.backend.RenderBackend;
 import com.gtnewhorizons.angelica.glsm.recording.GLCommand;
@@ -71,12 +72,14 @@ class ProgramBindingRegressionTest {
         GLStateManager.glUseProgram(bound);
         GLStateManager.glDeleteProgram(bound);
         assertTrue(GLStateManager.isProgramPendingDeletion(bound));
+        assertTrue(GL20.glIsProgram(bound), "driver keeps the bound program alive");
         final int other = linkedProgram();
         GLStateManager.glUseProgram(other);
         for (int i = 0; i < 8; i++) {
             final int unused = GLStateManager.glCreateProgram();
             GLStateManager.glDeleteProgram(unused);
             assertFalse(GLStateManager.isProgramPendingDeletion(unused));
+            assertFalse(GL20.glIsProgram(unused), "driver deletes an unbound program immediately");
             assertFalse(GLStateManager.isProgramPendingDeletion(bound));
         }
         GLStateManager.glUseProgram(0);
@@ -84,20 +87,7 @@ class ProgramBindingRegressionTest {
     }
 
     private static int linkedProgram() {
-        int vertex = GLStateManager.glCreateShader(GL20.GL_VERTEX_SHADER);
-        int fragment = GLStateManager.glCreateShader(GL20.GL_FRAGMENT_SHADER);
-        GLStateManager.glShaderSource(vertex, "#version 330 core\nvoid main() { gl_Position = vec4(0); }");
-        GLStateManager.glShaderSource(fragment, "#version 330 core\nout vec4 color; void main() { color = vec4(1); }");
-        GLStateManager.glCompileShader(vertex);
-        GLStateManager.glCompileShader(fragment);
-        int program = GLStateManager.glCreateProgram();
-        GLStateManager.glAttachShader(program, vertex);
-        GLStateManager.glAttachShader(program, fragment);
-        GLStateManager.glLinkProgram(program);
-        GLStateManager.glDeleteShader(vertex);
-        GLStateManager.glDeleteShader(fragment);
-        assertEquals(GL11.GL_TRUE, GLStateManager.glGetProgrami(program, GL20.GL_LINK_STATUS));
-        return program;
+        return GlTestSupport.program(GlTestSupport.TRIVIAL_VS, GlTestSupport.TRIVIAL_FS);
     }
 
     @Test
@@ -109,7 +99,7 @@ class ProgramBindingRegressionTest {
         int id = linkedProgram();
         int other = linkedProgram();
         ProgramUniforms uniforms = mock(ProgramUniforms.class);
-        Program program = new Program(id, uniforms, mock(ProgramSamplers.class), mock(ProgramImages.class));
+        Program program = new Program(id, null, uniforms, mock(ProgramSamplers.class), mock(ProgramImages.class));
         DeferredWorldRenderingPipeline pipeline = mock(DeferredWorldRenderingPipeline.class);
         DeferredWorldRenderingPipeline.Pass pass = Reflect.allocate(DeferredWorldRenderingPipeline.Pass.class);
         Reflect.set(pass, "program", program);
@@ -152,13 +142,16 @@ class ProgramBindingRegressionTest {
             for (int i = 0; i < 5; i++) GLStateManager.glCallList(list);
             verify(backend, times(1)).isProgram(id);
             assertEquals(id, GLStateManager.getActiveProgram());
+            assertEquals(id, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM));
 
             GLStateManager.glDeleteProgram(id);
             GLStateManager.glCallList(list); // Still valid while bound, but must not be cached.
             assertEquals(id, GLStateManager.getActiveProgram());
+            assertEquals(id, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM));
             GLStateManager.glUseProgram(other); // Completes deferred deletion.
             GLStateManager.glCallList(list);
             assertEquals(0, GLStateManager.getActiveProgram());
+            assertEquals(0, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM));
             verify(backend, times(4)).isProgram(id);
             GLStateManager.glCallList(list);
             verify(backend, times(4)).isProgram(id);

@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.glsm;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 
 import java.nio.IntBuffer;
@@ -11,6 +12,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @GLCompatTest
 public class GLSM_StateQueryRoundTrip_UnitTest {
+
+    private static IntBuffer driverInts(int pname) {
+        final IntBuffer buf = BufferUtils.createIntBuffer(16);
+        GL11.glGetInteger(pname, buf);
+        return buf;
+    }
 
     @Test
     void activeTextureRoundTrips() {
@@ -30,9 +37,11 @@ public class GLSM_StateQueryRoundTrip_UnitTest {
 
             GLStateManager.glActiveTexture(0);
             assertEquals(GL13.GL_TEXTURE2, GLStateManager.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
+            assertEquals(GL13.GL_TEXTURE2, GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
 
             GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + GLStateManager.MAX_TEXTURE_UNITS);
             assertEquals(GL13.GL_TEXTURE2, GLStateManager.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
+            assertEquals(GL13.GL_TEXTURE2, GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
         } finally {
             GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
         }
@@ -43,8 +52,10 @@ public class GLSM_StateQueryRoundTrip_UnitTest {
         try {
             GLStateManager.glDepthMask(false);
             assertEquals(GL11.GL_FALSE, GLStateManager.glGetInteger(GL11.GL_DEPTH_WRITEMASK));
+            assertEquals(GL11.GL_FALSE, GL11.glGetInteger(GL11.GL_DEPTH_WRITEMASK));
             GLStateManager.glDepthMask(true);
             assertEquals(GL11.GL_TRUE, GLStateManager.glGetInteger(GL11.GL_DEPTH_WRITEMASK));
+            assertEquals(GL11.GL_TRUE, GL11.glGetInteger(GL11.GL_DEPTH_WRITEMASK));
         } finally {
             GLStateManager.glDepthMask(true);
         }
@@ -71,6 +82,10 @@ public class GLSM_StateQueryRoundTrip_UnitTest {
             GLStateManager.glGetInteger(GL11.GL_POLYGON_MODE, params);
             assertEquals(GL11.GL_LINE, params.get(0), "front mode");
             assertEquals(GL11.GL_LINE, params.get(1), "back mode");
+
+            final IntBuffer driver = driverInts(GL11.GL_POLYGON_MODE);
+            assertEquals(GL11.GL_LINE, driver.get(0), "driver front mode");
+            assertEquals(GL11.GL_LINE, driver.get(1), "driver back mode");
         } finally {
             GLStateManager.glPolygonMode(GL11.GL_FRONT_AND_BACK, GL11.GL_FILL);
         }
@@ -88,6 +103,11 @@ public class GLSM_StateQueryRoundTrip_UnitTest {
             assertEquals(2, GLStateManager.glGetInteger(GL11.GL_UNPACK_SKIP_PIXELS));
             assertEquals(3, GLStateManager.glGetInteger(GL11.GL_UNPACK_SKIP_ROWS));
             assertEquals(1, GLStateManager.glGetInteger(GL11.GL_UNPACK_ALIGNMENT));
+
+            assertEquals(64, GL11.glGetInteger(GL11.GL_UNPACK_ROW_LENGTH));
+            assertEquals(2, GL11.glGetInteger(GL11.GL_UNPACK_SKIP_PIXELS));
+            assertEquals(3, GL11.glGetInteger(GL11.GL_UNPACK_SKIP_ROWS));
+            assertEquals(1, GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT));
         } finally {
             GLStateManager.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 0);
             GLStateManager.glPixelStorei(GL11.GL_UNPACK_SKIP_PIXELS, 0);
@@ -106,6 +126,12 @@ public class GLSM_StateQueryRoundTrip_UnitTest {
         assertEquals(5, params[1]);
         assertEquals(17, params[2]);
         assertEquals(23, params[3]);
+
+        final IntBuffer driver = driverInts(GL11.GL_VIEWPORT);
+        assertEquals(3, driver.get(0));
+        assertEquals(5, driver.get(1));
+        assertEquals(17, driver.get(2));
+        assertEquals(23, driver.get(3));
     }
 
     @Test
@@ -117,6 +143,12 @@ public class GLSM_StateQueryRoundTrip_UnitTest {
         final int unpackAlignment = GLStateManager.glGetInteger(GL11.GL_UNPACK_ALIGNMENT);
         final int[] viewport = new int[4];
         GLStateManager.glGetInteger(GL11.GL_VIEWPORT, viewport);
+        final int driverActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        final int driverDepthWriteMask = GL11.glGetInteger(GL11.GL_DEPTH_WRITEMASK);
+        final int driverCullMode = GL11.glGetInteger(GL11.GL_CULL_FACE_MODE);
+        final int driverPolygonMode = GL11.glGetInteger(GL11.GL_POLYGON_MODE);
+        final int driverUnpackAlignment = GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT);
+        final IntBuffer driverViewport = driverInts(GL11.GL_VIEWPORT);
 
         GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + 4);
         GLStateManager.glDepthMask(false);
@@ -143,5 +175,30 @@ public class GLSM_StateQueryRoundTrip_UnitTest {
         assertEquals(viewport[1], restored[1]);
         assertEquals(viewport[2], restored[2]);
         assertEquals(viewport[3], restored[3]);
+
+        assertEquals(driverActiveTexture, GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
+        assertEquals(driverDepthWriteMask, GL11.glGetInteger(GL11.GL_DEPTH_WRITEMASK));
+        assertEquals(driverCullMode, GL11.glGetInteger(GL11.GL_CULL_FACE_MODE));
+        assertEquals(driverPolygonMode, GL11.glGetInteger(GL11.GL_POLYGON_MODE));
+        assertEquals(driverUnpackAlignment, GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT));
+        final IntBuffer driverRestored = driverInts(GL11.GL_VIEWPORT);
+        for (int i = 0; i < 4; i++) {
+            assertEquals(driverViewport.get(i), driverRestored.get(i));
+        }
+    }
+
+    @Test
+    void uncachedTexParameterFallsThroughToTheDriver() {
+        final int tex = GLStateManager.glGenTextures();
+        try {
+            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+
+            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE);
+            assertEquals(GL12.GL_CLAMP_TO_EDGE, GLStateManager.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_WRAP_R), "uncached pname must fall through to the driver");
+            assertEquals(GL11.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_WRAP_R),
+                GLStateManager.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_WRAP_R), "uncached pname must match the driver");
+        } finally {
+            GLStateManager.glDeleteTextures(tex);
+        }
     }
 }

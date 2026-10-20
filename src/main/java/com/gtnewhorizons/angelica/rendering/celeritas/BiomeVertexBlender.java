@@ -1,20 +1,41 @@
 package com.gtnewhorizons.angelica.rendering.celeritas;
 
 import com.gtnewhorizon.gtnhlib.client.renderer.TessellatorManager;
+import com.gtnewhorizons.angelica.config.AngelicaConfig;
 import com.gtnewhorizons.angelica.proxy.ClientProxy;
+import com.prupe.mcpatcher.ctm.CTMUtils;
+import jss.notfine.config.MCPatcherForgeConfig;
 import me.jellysquid.mods.sodium.client.gui.options.named.BiomeBlendMode;
+import net.minecraft.block.BlockGrass;
+import net.minecraft.client.renderer.RenderBlocks;
+import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.init.Blocks;
+import net.minecraft.util.IIcon;
+import net.minecraft.world.IBlockAccess;
 import org.embeddedt.embeddium.api.util.ColorMixer;
 
 import java.nio.ByteOrder;
 
 public final class BiomeVertexBlender {
     private static final boolean LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+    // Rows: -Y, +Y, -Z, +Z, -X, +X.
+    // Columns: RenderBlocks top-left, bottom-left, bottom-right, top-right.
+    // Corner bits: 1 = max X, 2 = max Y, 4 = max Z; unset = min.
+    private static final int[][] FACE_CORNERS = {
+        {4, 0, 1, 5}, {7, 3, 2, 6}, {2, 3, 1, 0},
+        {6, 4, 5, 7}, {6, 2, 0, 4}, {5, 1, 3, 7}
+    };
     private SmoothBiomeColorCache cache;
     private SmoothBiomeColorCache.ColorType type;
     private int blockX, blockY, blockZ;
     private boolean replacedBlockTint;
     private final int[] cornerColors = new int[8];
     private int populatedCorners;
+    private float savedRtl, savedGtl, savedBtl, savedRbl, savedGbl, savedBbl;
+    private float savedRbr, savedGbr, savedBbr, savedRtr, savedGtr, savedBtr;
+    private boolean savedAo;
+    private int savedLtl, savedLbl, savedLbr, savedLtr;
+    private int savedColor, savedBrightness;
 
     public void setup(SmoothBiomeColorCache cache, SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
         this.cache = cache;
@@ -36,6 +57,10 @@ public final class BiomeVertexBlender {
         return type == SmoothBiomeColorCache.ColorType.GRASS;
     }
 
+    public boolean isWater() {
+        return type == SmoothBiomeColorCache.ColorType.WATER;
+    }
+
     public boolean isActive() {
         return replacedBlockTint;
     }
@@ -46,20 +71,112 @@ public final class BiomeVertexBlender {
         return blender != null && blender.isActive();
     }
 
-    public static int blockColor(SmoothBiomeColorCache cache, SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
-        if (ClientProxy.options().quality.biomeBlendMode != BiomeBlendMode.FANCY) {
-            return cache.getColor(type, x, y, z);
-        }
-        final BiomeVertexBlender blender = ((BiomeBlendTessellator) TessellatorManager.get()).angelica$getBiomeBlender();
-        return blender == null ? cache.getColor(type, x, y, z) : blender.replaceBlockColor(cache, type, x, y, z);
+    public void arm() {
+        cache.armedBlender = this;
     }
 
-    int replaceBlockColor(SmoothBiomeColorCache cache, SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
-        if (this.cache == cache && this.type == type && blockX == x && blockY == y && blockZ == z) {
-            replacedBlockTint = true;
-            return 0xFFFFFF;
+    public void disarm() {
+        cache.armedBlender = null;
+    }
+
+    private boolean tryDefer(SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
+        if (this.type != type || blockX != x || blockY != y || blockZ != z) return false;
+        replacedBlockTint = true;
+        return true;
+    }
+
+    public boolean beginFace(RenderBlocks renderer, int face, double x, double y, double z, IIcon icon) {
+        if (!isActive()) return false;
+        final Tessellator tessellator = TessellatorManager.get();
+        if (((BiomeBlendTessellator) tessellator).angelica$getBiomeBlender() != this) return false;
+        final IIcon originalIcon = AngelicaConfig.enableMCPatcherForgeFeatures && MCPatcherForgeConfig.ConnectedTextures.enabled ? CTMUtils.getOriginalIcon(icon) : icon;
+        if (isGrass() && icon != Blocks.grass.getIcon(1, 0) && icon != BlockGrass.getIconSideOverlay()
+            && originalIcon != Blocks.grass.getIcon(1, 0) && originalIcon != BlockGrass.getIconSideOverlay()) {
+            return false;
         }
-        return cache.getColor(type, x, y, z);
+
+        savedRtl = renderer.colorRedTopLeft; savedGtl = renderer.colorGreenTopLeft; savedBtl = renderer.colorBlueTopLeft;
+        savedRbl = renderer.colorRedBottomLeft; savedGbl = renderer.colorGreenBottomLeft; savedBbl = renderer.colorBlueBottomLeft;
+        savedRbr = renderer.colorRedBottomRight; savedGbr = renderer.colorGreenBottomRight; savedBbr = renderer.colorBlueBottomRight;
+        savedRtr = renderer.colorRedTopRight; savedGtr = renderer.colorGreenTopRight; savedBtr = renderer.colorBlueTopRight;
+        final boolean ao = savedAo = renderer.enableAO;
+        savedLtl = renderer.brightnessTopLeft; savedLbl = renderer.brightnessBottomLeft;
+        savedLbr = renderer.brightnessBottomRight; savedLtr = renderer.brightnessTopRight;
+        final int color = savedColor = tessellator.color;
+        final int brightness = savedBrightness = tessellator.brightness;
+        if (!ao) {
+            final int abgr = nativeToABGR(color);
+            renderer.colorRedTopLeft = renderer.colorRedBottomLeft = renderer.colorRedBottomRight = renderer.colorRedTopRight = (abgr & 255) / 255.0f;
+            renderer.colorGreenTopLeft = renderer.colorGreenBottomLeft = renderer.colorGreenBottomRight = renderer.colorGreenTopRight = (abgr >> 8 & 255) / 255.0f;
+            renderer.colorBlueTopLeft = renderer.colorBlueBottomLeft = renderer.colorBlueBottomRight = renderer.colorBlueTopRight = (abgr >> 16 & 255) / 255.0f;
+            renderer.brightnessTopLeft = renderer.brightnessBottomLeft = renderer.brightnessBottomRight = renderer.brightnessTopRight = brightness;
+            renderer.enableAO = true;
+        }
+        try {
+            tintFace(renderer, face, x, y, z);
+        } catch (Throwable t) {
+            endFace(renderer);
+            throw t;
+        }
+        return true;
+    }
+
+    public void endFace(RenderBlocks renderer) {
+        renderer.colorRedTopLeft = savedRtl; renderer.colorGreenTopLeft = savedGtl; renderer.colorBlueTopLeft = savedBtl;
+        renderer.colorRedBottomLeft = savedRbl; renderer.colorGreenBottomLeft = savedGbl; renderer.colorBlueBottomLeft = savedBbl;
+        renderer.colorRedBottomRight = savedRbr; renderer.colorGreenBottomRight = savedGbr; renderer.colorBlueBottomRight = savedBbr;
+        renderer.colorRedTopRight = savedRtr; renderer.colorGreenTopRight = savedGtr; renderer.colorBlueTopRight = savedBtr;
+        renderer.enableAO = savedAo;
+        if (!savedAo) {
+            renderer.brightnessTopLeft = savedLtl; renderer.brightnessBottomLeft = savedLbl;
+            renderer.brightnessBottomRight = savedLbr; renderer.brightnessTopRight = savedLtr;
+            final Tessellator tessellator = TessellatorManager.get();
+            tessellator.color = savedColor;
+            tessellator.brightness = savedBrightness;
+        }
+    }
+
+    public static long smoothColor(IBlockAccess access, SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
+        final SmoothBiomeColorCache cache = SmoothBiomeColorCache.getActiveCache();
+        if (cache != null) {
+            final BiomeVertexBlender armed = cache.armedBlender;
+            if (armed != null && armed.tryDefer(type, x, y, z)) return 0xFFFFFFL;
+            return cache.getColor(type, x, y, z) & 0xFFFFFFFFL;
+        }
+        if (access instanceof WorldClientExtension ext) return ext.celeritas$getSmoothBiomeColorCache().getColor(type, x, y, z) & 0xFFFFFFFFL;
+        return -1L;
+    }
+
+    public void tintFace(RenderBlocks renderer, int face, double x, double y, double z) {
+        final int[] corners = FACE_CORNERS[face];
+        final int tl = faceColor(renderer, face, corners[0], x, y, z);
+        final int bl = faceColor(renderer, face, corners[1], x, y, z);
+        final int br = faceColor(renderer, face, corners[2], x, y, z);
+        final int tr = faceColor(renderer, face, corners[3], x, y, z);
+        renderer.colorRedTopLeft *= (tl >> 16 & 255) / 255.0f;
+        renderer.colorGreenTopLeft *= (tl >> 8 & 255) / 255.0f;
+        renderer.colorBlueTopLeft *= (tl & 255) / 255.0f;
+        renderer.colorRedBottomLeft *= (bl >> 16 & 255) / 255.0f;
+        renderer.colorGreenBottomLeft *= (bl >> 8 & 255) / 255.0f;
+        renderer.colorBlueBottomLeft *= (bl & 255) / 255.0f;
+        renderer.colorRedBottomRight *= (br >> 16 & 255) / 255.0f;
+        renderer.colorGreenBottomRight *= (br >> 8 & 255) / 255.0f;
+        renderer.colorBlueBottomRight *= (br & 255) / 255.0f;
+        renderer.colorRedTopRight *= (tr >> 16 & 255) / 255.0f;
+        renderer.colorGreenTopRight *= (tr >> 8 & 255) / 255.0f;
+        renderer.colorBlueTopRight *= (tr & 255) / 255.0f;
+    }
+
+    private int faceColor(RenderBlocks renderer, int face, int corner, double x, double y, double z) {
+        if (renderer.renderFromInside) corner ^= face < 4 ? 1 : 4;
+        return sampleVertex(
+            x + ((corner & 1) == 0 ? renderer.renderMinX : renderer.renderMaxX),
+            y + ((corner & 2) == 0 ? renderer.renderMinY : renderer.renderMaxY),
+            z + ((corner & 4) == 0 ? renderer.renderMinZ : renderer.renderMaxZ));
+    }
+
+    public static int nativeToABGR(int color) {
+        return LITTLE_ENDIAN ? color : Integer.reverseBytes(color);
     }
 
     public int tint(int nativeColor, double x, double y, double z) {

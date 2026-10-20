@@ -7,34 +7,34 @@ import com.gtnewhorizons.angelica.glsm.hooks.DeferredBlendHandler;
 import com.gtnewhorizons.angelica.glsm.hooks.DeferredDepthColorHandler;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMConfig;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
+import com.gtnewhorizons.angelica.glsm.hooks.LineDrawHandler;
 import com.gtnewhorizons.angelica.glsm.hooks.ShaderTransformPostProcessor;
 import com.gtnewhorizons.angelica.glsm.shader.ShaderType;
 import org.taumc.glsl.grammar.GLSLParser;
-import com.gtnewhorizons.angelica.glsm.hooks.ShaderWorkSubmitter;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.sdlgpu.SDLGPUGate;
 import net.coderbot.iris.Iris;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Supplier;
 import net.coderbot.iris.gbuffer_overrides.state.StateTracker;
 import net.coderbot.iris.gl.blending.AlphaTestStorage;
 import net.coderbot.iris.gl.blending.BlendModeStorage;
 import net.coderbot.iris.gl.blending.DepthColorStorage;
 import net.coderbot.iris.gl.program.ProgramUniforms;
 import net.coderbot.iris.gl.program.Program;
+import net.coderbot.iris.gl.state.MultiListenerNotifier;
 import net.coderbot.iris.gl.state.StateUpdateNotifiers;
 import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline;
 import net.coderbot.iris.pipeline.WorldRenderingPipeline;
 import net.coderbot.iris.samplers.IrisSamplers;
 import net.coderbot.iris.texture.pbr.PBRTextureManager;
+import net.coderbot.iris.uniforms.CapturedRenderingState;
 import net.coderbot.iris.uniforms.SystemTimeUniforms;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import org.lwjgl.opengl.GL11;
 
 public class IrisGLSMBridge {
 
+    private static final MultiListenerNotifier alphaTestNotifier = new MultiListenerNotifier();
     private static Runnable alphaFuncListener = null;
-    private static Runnable alphaTestListener = null;
     private static Runnable blendFuncListener = null;
     private static Runnable fogModeListener = null;
     private static Runnable fogStartListener = null;
@@ -54,8 +54,8 @@ public class IrisGLSMBridge {
 
     static {
         programLastUpdatedFrame.defaultReturnValue(-1);
+        StateUpdateNotifiers.alphaTestNotifier = alphaTestNotifier;
         StateUpdateNotifiers.alphaFuncNotifier = listener -> alphaFuncListener = listener;
-        StateUpdateNotifiers.alphaTestNotifier = listener -> alphaTestListener = listener;
         StateUpdateNotifiers.blendFuncNotifier = listener -> blendFuncListener = listener;
         StateUpdateNotifiers.fogModeNotifier = listener -> fogModeListener = listener;
         StateUpdateNotifiers.fogStartNotifier = listener -> fogStartListener = listener;
@@ -66,6 +66,9 @@ public class IrisGLSMBridge {
 
     public static void installImmediateExtendedHandler() {
         GLSMHooks.immediateExtendedHandler = new ImmediateExtendedAttribs();
+        final CapturedRenderingState state = CapturedRenderingState.INSTANCE;
+        state.setEntityIdsListener(() -> GLStateManager.setEntityIds(
+            state.getCurrentRenderedEntity(), state.getCurrentRenderedBlockEntity(), state.getCurrentRenderedItem()));
     }
 
     public static void installPostTransformHook() {
@@ -104,13 +107,25 @@ public class IrisGLSMBridge {
     public static void register() {
         GLSMConfig.expandVertexFormats = Iris.enabled;
         IrisSamplers.initRenderer();
-        GLSMHooks.shaderWorkSubmitter = new ShaderWorkSubmitter() {
+        installPostTransformHook();
+        GLSMHooks.lineDrawHandler = new LineDrawHandler() {
+            private DeferredWorldRenderingPipeline linePipeline;
+
             @Override
-            public <T> CompletableFuture<T> submit(Supplier<T> work) {
-                return Iris.ShaderTransformExecutor.submitTracked(work);
+            public boolean bindLineProgram() {
+                if (!Iris.enabled || !(Iris.getPipelineManager().getPipelineNullable() instanceof DeferredWorldRenderingPipeline drp) || !drp.bindLineProgram()) {
+                    return false;
+                }
+                linePipeline = drp;
+                return true;
+            }
+
+            @Override
+            public void restoreProgram() {
+                linePipeline.restoreAfterLines();
+                linePipeline = null;
             }
         };
-        installPostTransformHook();
         GLSMHooks.blendHandler = new DeferredBlendHandler() {
             @Override
             public boolean isBlendLocked() {
@@ -182,7 +197,7 @@ public class IrisGLSMBridge {
         GLSMHooks.ALPHA_STATE_CHANGE.addListener(event -> {
             if (Iris.enabled) {
                 if (alphaFuncListener != null) alphaFuncListener.run();
-                if (alphaTestListener != null) alphaTestListener.run();
+                alphaTestNotifier.run();
             }
         });
 

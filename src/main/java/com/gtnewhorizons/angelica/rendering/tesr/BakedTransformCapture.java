@@ -43,6 +43,16 @@ public final class BakedTransformCapture extends DirectTessellator {
 
     @Override
     protected int interceptDraw(Tessellator tessellator) {
+        transform = delta.deltaOrNull(deltaMatrix);
+        try {
+            return super.interceptDraw(tessellator);
+        } finally {
+            transform = null;
+        }
+    }
+
+    @Override
+    public int draw() {
         final Color4 color = GLStateManager.getColor();
         final int packed = ColorABGR.pack(color.getRed(), color.getGreen(), color.getBlue(), color.getAlpha());
         if (!sawRun) {
@@ -51,12 +61,31 @@ public final class BakedTransformCapture extends DirectTessellator {
         } else if (packed != firstColor) {
             colorUniform = false;
         }
-        transform = delta.deltaOrNull(deltaMatrix);
-        try {
-            return super.interceptDraw(tessellator);
-        } finally {
-            transform = null;
+        return super.draw();
+    }
+
+    // While capturing, Tessellator.instance is this tessellator, so vanilla code (e.g. RenderBlocks.renderBlockAsItem)
+    // writes vertices directly instead of going through interceptDraw; bake the transform in here as well.
+    @Override
+    public void addVertex(double x, double y, double z) {
+        final Matrix4fc direct = transform == null ? delta.deltaOrNull(deltaMatrix) : null;
+        if (direct == null) {
+            super.addVertex(x, y, z);
+            return;
         }
+        scratch.set((float) (x + xOffset), (float) (y + yOffset), (float) (z + zOffset)).mulPosition(direct);
+        super.addVertex(scratch.x - xOffset, scratch.y - yOffset, scratch.z - zOffset);
+    }
+
+    @Override
+    public void setNormal(float nx, float ny, float nz) {
+        final Matrix4fc direct = transform == null ? delta.deltaOrNull(deltaMatrix) : null;
+        if (direct == null) {
+            super.setNormal(nx, ny, nz);
+            return;
+        }
+        scratch.set(nx, ny, nz).mulDirection(direct).normalize();
+        super.setNormal(scratch.x, scratch.y, scratch.z);
     }
 
     @Override

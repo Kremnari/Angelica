@@ -3,12 +3,17 @@ package com.gtnewhorizons.angelica.glsm;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -20,35 +25,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @GLCompatTest
 public class GLSM_GLU_UnitTest {
 
-    private static final FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
-
     private Matrix4f getModelviewMatrix() {
-        buffer.clear();
-        GLStateManager.glGetFloat(GL11.GL_MODELVIEW_MATRIX, buffer);
-        return new Matrix4f(buffer);
+        return new Matrix4f(GlTestSupport.modelview());
     }
 
     private Matrix4f getProjectionMatrix() {
-        buffer.clear();
-        GLStateManager.glGetFloat(GL11.GL_PROJECTION_MATRIX, buffer);
-        return new Matrix4f(buffer);
+        return new Matrix4f(GlTestSupport.matrix(GL11.GL_PROJECTION_MATRIX));
     }
 
     private void assertMatrixEquals(Matrix4f expected, Matrix4f actual, String message) {
         assertTrue(expected.equals(actual, 0.001f), () -> message + "\nExpected:\n" + expected + "\nActual:\n" + actual);
-    }
-
-    @Test
-    void gluPerspective_matchesJOML() {
-        GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
-        GLStateManager.glLoadIdentity();
-
-        GLStateManager.gluPerspective(60.0f, 1.5f, 0.1f, 1000.0f);
-
-        Matrix4f expected = new Matrix4f().perspective((float) Math.toRadians(60.0f), 1.5f, 0.1f, 1000.0f);
-        assertMatrixEquals(expected, getProjectionMatrix(), "gluPerspective standard");
-
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
     }
 
     @Test
@@ -65,40 +51,6 @@ public class GLSM_GLU_UnitTest {
         assertMatrixEquals(expected, getProjectionMatrix(), "gluPerspective after scale");
 
         GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
-    }
-
-    @Test
-    void gluLookAt_matchesJOML() {
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
-        GLStateManager.glLoadIdentity();
-
-        GLStateManager.gluLookAt(
-            0.0f, 0.0f, 5.0f,   // eye
-            0.0f, 0.0f, 0.0f,   // center
-            0.0f, 1.0f, 0.0f);  // up
-
-        Matrix4f expected = new Matrix4f().lookAt(
-            0.0f, 0.0f, 5.0f,
-            0.0f, 0.0f, 0.0f,
-            0.0f, 1.0f, 0.0f);
-        assertMatrixEquals(expected, getModelviewMatrix(), "gluLookAt simple");
-    }
-
-    @Test
-    void gluLookAt_offAxis() {
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
-        GLStateManager.glLoadIdentity();
-
-        GLStateManager.gluLookAt(
-            3.0f, 4.0f, 5.0f,
-            1.0f, 2.0f, 0.0f,
-            0.0f, 1.0f, 0.0f);
-
-        Matrix4f expected = new Matrix4f().lookAt(
-            3.0f, 4.0f, 5.0f,
-            1.0f, 2.0f, 0.0f,
-            0.0f, 1.0f, 0.0f);
-        assertMatrixEquals(expected, getModelviewMatrix(), "gluLookAt off-axis");
     }
 
     @Test
@@ -133,61 +85,24 @@ public class GLSM_GLU_UnitTest {
         GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
     }
 
-    @Test
-    void gluPickMatrix_matchesManual() {
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "gluPickMatrix center, 0, 0, 800, 600, 400, 300, 5",
+        "gluPickMatrix off-center viewport, 100, 50, 640, 480, 200, 150, 10",
+    })
+    void gluPickMatrix_matchesManual(String label, int vx, int vy, int vw, int vh, float x, float y, float delta) {
         GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
         GLStateManager.glLoadIdentity();
 
         IntBuffer viewport = BufferUtils.createIntBuffer(4);
-        viewport.put(0, 0);   // x
-        viewport.put(1, 0);   // y
-        viewport.put(2, 800); // width
-        viewport.put(3, 600); // height
+        viewport.put(0, vx).put(1, vy).put(2, vw).put(3, vh);
 
-        float x = 400.0f, y = 300.0f, deltaX = 5.0f, deltaY = 5.0f;
-
-        GLStateManager.gluPickMatrix(x, y, deltaX, deltaY, viewport);
-
-        // Reproduce the expected result: translate then scale
-        Matrix4f expected = new Matrix4f()
-            .translate(
-                (800 - 2 * (x - 0)) / deltaX,
-                (600 - 2 * (y - 0)) / deltaY,
-                0.0f)
-            .scale(
-                800.0f / deltaX,
-                600.0f / deltaY,
-                1.0f);
-        assertMatrixEquals(expected, getProjectionMatrix(), "gluPickMatrix center");
-
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
-    }
-
-    @Test
-    void gluPickMatrix_offCenter() {
-        GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
-        GLStateManager.glLoadIdentity();
-
-        IntBuffer viewport = BufferUtils.createIntBuffer(4);
-        viewport.put(0, 100);
-        viewport.put(1, 50);
-        viewport.put(2, 640);
-        viewport.put(3, 480);
-
-        float x = 200.0f, y = 150.0f, deltaX = 10.0f, deltaY = 10.0f;
-
-        GLStateManager.gluPickMatrix(x, y, deltaX, deltaY, viewport);
+        GLStateManager.gluPickMatrix(x, y, delta, delta, viewport);
 
         Matrix4f expected = new Matrix4f()
-            .translate(
-                (640 - 2 * (x - 100)) / deltaX,
-                (480 - 2 * (y - 50)) / deltaY,
-                0.0f)
-            .scale(
-                640.0f / deltaX,
-                480.0f / deltaY,
-                1.0f);
-        assertMatrixEquals(expected, getProjectionMatrix(), "gluPickMatrix off-center viewport");
+            .translate((vw - 2 * (x - vx)) / delta, (vh - 2 * (y - vy)) / delta, 0.0f)
+            .scale(vw / delta, vh / delta, 1.0f);
+        assertMatrixEquals(expected, getProjectionMatrix(), label);
 
         GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
     }
@@ -208,59 +123,40 @@ public class GLSM_GLU_UnitTest {
         GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
     }
 
-    @Test
-    void gluErrorString_glErrors() {
-        assertEquals("No error", GLStateManager.gluErrorString(GL11.GL_NO_ERROR));
-        assertEquals("Invalid enum", GLStateManager.gluErrorString(GL11.GL_INVALID_ENUM));
-        assertEquals("Invalid value", GLStateManager.gluErrorString(GL11.GL_INVALID_VALUE));
-        assertEquals("Invalid operation", GLStateManager.gluErrorString(GL11.GL_INVALID_OPERATION));
-        assertEquals("Out of memory", GLStateManager.gluErrorString(GL11.GL_OUT_OF_MEMORY));
+    static Stream<Arguments> errorStrings() {
+        return Stream.of(
+            Arguments.of(GL11.GL_NO_ERROR, "No error"),
+            Arguments.of(GL11.GL_INVALID_ENUM, "Invalid enum"),
+            Arguments.of(GL11.GL_INVALID_VALUE, "Invalid value"),
+            Arguments.of(GL11.GL_INVALID_OPERATION, "Invalid operation"),
+            Arguments.of(GL11.GL_OUT_OF_MEMORY, "Out of memory"),
+            Arguments.of(100900, "Invalid enum (glu)"),
+            Arguments.of(100901, "Invalid value (glu)"),
+            Arguments.of(100902, "Out of memory (glu)"),
+            Arguments.of(99999, "Unknown error: 99999"));
     }
 
-    @Test
-    void gluErrorString_gluErrors() {
-        assertEquals("Invalid enum (glu)", GLStateManager.gluErrorString(100900));
-        assertEquals("Invalid value (glu)", GLStateManager.gluErrorString(100901));
-        assertEquals("Out of memory (glu)", GLStateManager.gluErrorString(100902));
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("errorStrings")
+    void gluErrorString(int code, String expected) {
+        assertEquals(expected, GLStateManager.gluErrorString(code));
     }
 
-    @Test
-    void gluErrorString_unknownCode() {
-        assertEquals("Unknown error: 99999", GLStateManager.gluErrorString(99999));
+    static Stream<Arguments> gluUnProject_roundTrips() {
+        return Stream.of(
+            Arguments.of("identity", new Matrix4f(), new Matrix4f(), 0.001f),
+            Arguments.of("perspective with lookAt", new Matrix4f().perspective((float) Math.toRadians(60.0f), 800.0f / 600.0f, 0.1f, 100.0f),
+                new Matrix4f().lookAt(0, 0, 5, 0, 0, 0, 0, 1, 0), 0.01f));
     }
 
-    @Test
-    void gluUnProject_identity() {
-        FloatBuffer model = BufferUtils.createFloatBuffer(16);
-        FloatBuffer proj = BufferUtils.createFloatBuffer(16);
-        new Matrix4f().get(model);
-        new Matrix4f().get(proj);
-
-        IntBuffer viewport = BufferUtils.createIntBuffer(4);
-        viewport.put(0, 0).put(1, 0).put(2, 800).put(3, 600);
-
-        FloatBuffer result = BufferUtils.createFloatBuffer(3);
-        boolean ok = GLStateManager.gluUnProject(400.0f, 300.0f, 0.5f, model, proj, viewport, result);
-        assertTrue(ok, "gluUnProject should succeed");
-        assertEquals(0.0f, result.get(0), 0.001f, "X");
-        assertEquals(0.0f, result.get(1), 0.001f, "Y");
-        assertEquals(0.0f, result.get(2), 0.001f, "Z");
-    }
-
-    @Test
-    void gluUnProject_withPerspective() {
-        Matrix4f proj = new Matrix4f().perspective((float) Math.toRadians(60.0f), 800.0f / 600.0f, 0.1f, 100.0f);
-        Matrix4f model = new Matrix4f().lookAt(0, 0, 5, 0, 0, 0, 0, 1, 0);
-
+    @ParameterizedTest(name = "{0}")
+    @MethodSource
+    void gluUnProject_roundTrips(String label, Matrix4f proj, Matrix4f model, float tolerance) {
         Vector4f worldPt = new Vector4f(0, 0, 0, 1);
-        Matrix4f mvp = new Matrix4f(proj).mul(model);
-        mvp.transform(worldPt);
-        float ndcX = worldPt.x / worldPt.w;
-        float ndcY = worldPt.y / worldPt.w;
-        float ndcZ = worldPt.z / worldPt.w;
-        float winX = (ndcX * 0.5f + 0.5f) * 800.0f;
-        float winY = (ndcY * 0.5f + 0.5f) * 600.0f;
-        float winZ = ndcZ * 0.5f + 0.5f;
+        new Matrix4f(proj).mul(model).transform(worldPt);
+        float winX = (worldPt.x / worldPt.w * 0.5f + 0.5f) * 800.0f;
+        float winY = (worldPt.y / worldPt.w * 0.5f + 0.5f) * 600.0f;
+        float winZ = worldPt.z / worldPt.w * 0.5f + 0.5f;
 
         FloatBuffer modelBuf = BufferUtils.createFloatBuffer(16);
         FloatBuffer projBuf = BufferUtils.createFloatBuffer(16);
@@ -271,11 +167,10 @@ public class GLSM_GLU_UnitTest {
         viewport.put(0, 0).put(1, 0).put(2, 800).put(3, 600);
 
         FloatBuffer result = BufferUtils.createFloatBuffer(3);
-        boolean ok = GLStateManager.gluUnProject(winX, winY, winZ, modelBuf, projBuf, viewport, result);
-        assertTrue(ok, "gluUnProject should succeed");
-        assertEquals(0.0f, result.get(0), 0.01f, "X should unproject back to 0");
-        assertEquals(0.0f, result.get(1), 0.01f, "Y should unproject back to 0");
-        assertEquals(0.0f, result.get(2), 0.01f, "Z should unproject back to 0");
+        assertTrue(GLStateManager.gluUnProject(winX, winY, winZ, modelBuf, projBuf, viewport, result), "gluUnProject should succeed");
+        assertEquals(0.0f, result.get(0), tolerance, "X should unproject back to 0");
+        assertEquals(0.0f, result.get(1), tolerance, "Y should unproject back to 0");
+        assertEquals(0.0f, result.get(2), tolerance, "Z should unproject back to 0");
     }
 
     @Test
@@ -312,6 +207,8 @@ public class GLSM_GLU_UnitTest {
 
         int result = GLStateManager.gluBuild2DMipmaps(GL11.GL_TEXTURE_2D, GL11.GL_RGBA, 4, 4, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
         assertEquals(0, result, "gluBuild2DMipmaps should return 0 on success");
+        assertEquals(4, GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_WIDTH));
+        assertEquals(1, GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 2, GL11.GL_TEXTURE_WIDTH));
 
         GL11.glDeleteTextures(texId);
     }

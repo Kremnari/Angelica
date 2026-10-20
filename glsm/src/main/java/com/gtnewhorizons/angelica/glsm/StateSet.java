@@ -24,6 +24,7 @@ public final class StateSet {
     public static final int R_ACTIVE_UNIT = 1 << 13;
     public static final int R_PROGRAM = 1 << 14;
     public static final int R_SCISSOR = 1 << 15;
+    public static final int R_HINT = 1 << 16;
 
     public static final int B_FRAG_COLORBUF = 1;
     public static final int B_FRAG_TEXTURE = 1 << 1;
@@ -88,10 +89,15 @@ public final class StateSet {
                 GLStateManager.getActiveTextureUnitStack(),
                 GLStateManager.getBlendMode(), GLStateManager.getAlphaTest(), GLStateManager.getDepthTest(),
                 GLStateManager.getLightingState(), GLStateManager.getCullState(), GLStateManager.getPolygonOffsetFillState(),
-                GLStateManager.getTextures().getTextureUnitStates(0)
+                GLStateManager.getTextures().getTextureUnitStates(0), GLStateManager.getTextures().getTextureUnitStates(1),
+                GLStateManager.getLightStates()[0], GLStateManager.getLightStates()[1],
+                GLStateManager.getLightDataStates()[0], GLStateManager.getLightDataStates()[1],
+                GLStateManager.getColorMaterial(), GLStateManager.getColorMaterialFace(), GLStateManager.getColorMaterialParameter(),
+                GLStateManager.getLightModel(), GLStateManager.getFrontMaterial(), GLStateManager.getBackMaterial(),
+                GLStateManager.getNormalizeState(), GLStateManager.getRescaleNormalState()
             ),
             R_BLEND | R_DEPTH | R_COLOR_MASK | R_POLYGON | R_TEXTURE | R_ACTIVE_UNIT,
-            B_FRAG_COLORBUF,
+            B_FRAG_COLORBUF | B_LIGHTING,
             true);
     }
 
@@ -102,9 +108,11 @@ public final class StateSet {
                 GLStateManager.getTextures().getTextureUnitBindings(0), GLStateManager.getTextures().getTextureUnitBindings(1),
                 GLStateManager.getActiveTextureUnitStack(), GLStateManager.getProgramStack(),
                 GLStateManager.getBlendMode(), GLStateManager.getAlphaTest(), GLStateManager.getDepthTest(),
-                GLStateManager.getTextures().getTextureUnitStates(0)
+                GLStateManager.getTextures().getTextureUnitStates(0),
+                GLStateManager.getColorMask(), GLStateManager.getCullState(),
+                GLStateManager.getPolygonState(), GLStateManager.getPolygonOffsetFillState()
             ),
-            R_BLEND | R_DEPTH | R_TEXTURE | R_ACTIVE_UNIT | R_PROGRAM,
+            R_BLEND | R_DEPTH | R_COLOR_MASK | R_TEXTURE | R_ACTIVE_UNIT | R_PROGRAM | R_POLYGON,
             0,
             true);
     }
@@ -116,9 +124,11 @@ public final class StateSet {
                 GLStateManager.getTextures().getTextureUnitBindings(0), GLStateManager.getTextures().getTextureUnitBindings(1),
                 GLStateManager.getActiveTextureUnitStack(),
                 GLStateManager.getBlendMode(), GLStateManager.getAlphaTest(), GLStateManager.getDepthTest(),
-                GLStateManager.getTextures().getTextureUnitStates(0)
+                GLStateManager.getTextures().getTextureUnitStates(0),
+                GLStateManager.getColorMask(), GLStateManager.getCullState(),
+                GLStateManager.getPolygonState(), GLStateManager.getPolygonOffsetFillState()
             ),
-            R_BLEND | R_DEPTH | R_TEXTURE | R_ACTIVE_UNIT,
+            R_BLEND | R_DEPTH | R_COLOR_MASK | R_TEXTURE | R_ACTIVE_UNIT | R_POLYGON,
             0,
             true);
     }
@@ -214,6 +224,9 @@ public final class StateSet {
         }
         if ((mask & GL11.GL_POINT_BIT) != 0) {
             restore |= R_POINT;
+        }
+        if ((mask & GL11.GL_HINT_BIT) != 0) {
+            restore |= R_HINT;
         }
         if ((mask & GL11.GL_POLYGON_BIT) != 0) {
             restore |= R_POLYGON;

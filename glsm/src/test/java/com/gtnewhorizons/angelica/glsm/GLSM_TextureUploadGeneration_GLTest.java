@@ -38,16 +38,6 @@ public class GLSM_TextureUploadGeneration_GLTest {
     }
 
     @Test
-    void anUploadLeavesANonZeroGeneration() {
-        final int texId = allocate(4);
-        try {
-            assertNotEquals(0, TextureInfoCache.INSTANCE.getInfo(texId).getUploadGeneration());
-        } finally {
-            GLStateManager.glDeleteTextures(texId);
-        }
-    }
-
-    @Test
     void recreatingATextureAtAReusedIdYieldsAFreshInfo() {
         final int texId = allocate(4);
         try {
@@ -72,6 +62,7 @@ public class GLSM_TextureUploadGeneration_GLTest {
         try {
             final TextureInfo info = TextureInfoCache.INSTANCE.getInfo(texId);
             final int afterAlloc = info.getUploadGeneration();
+            assertNotEquals(0, afterAlloc);
 
             GLStateManager.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, BufferUtils.createByteBuffer(2 * 2 * 4));
             assertNotEquals(afterAlloc, info.getUploadGeneration(), "content changed, so anything caching the pixels is stale");
@@ -79,6 +70,8 @@ public class GLSM_TextureUploadGeneration_GLTest {
             final int afterSub = info.getUploadGeneration();
             GLStateManager.glTexSubImage2D(GL11.GL_TEXTURE_2D, 1, 0, 0, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, BufferUtils.createByteBuffer(4));
             assertEquals(afterSub, info.getUploadGeneration(), "only level 0 is tracked");
+            // Level 1 was never allocated, so the driver rejects that upload.
+            assertEquals(GL11.GL_INVALID_OPERATION, GL11.glGetError());
         } finally {
             GLStateManager.glDeleteTextures(texId);
         }

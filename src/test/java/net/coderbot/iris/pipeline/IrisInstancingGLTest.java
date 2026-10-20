@@ -1,12 +1,14 @@
 package net.coderbot.iris.pipeline;
 
+import com.gtnewhorizons.angelica.glsm.EntityIdsOnlyHandler;
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
-import com.gtnewhorizons.angelica.glsm.RenderSystem;
+import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import com.gtnewhorizons.angelica.glsm.ffp.Instancing;
 import com.gtnewhorizons.angelica.glsm.ffp.InstancedAttribs;
 import com.gtnewhorizons.angelica.glsm.ffp.FfpFixture;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
+import com.gtnewhorizons.angelica.glsm.hooks.ImmediateExtendedAttribHandler;
 import com.gtnewhorizons.angelica.glsm.shader.ShaderType;
 import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import com.gtnewhorizons.angelica.rendering.tesr.BatchEligibility;
@@ -21,8 +23,8 @@ import net.coderbot.iris.uniforms.CapturedRenderingState;
 import net.coderbot.batchedentityrendering.impl.AngelicaBufferSource;
 import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline.Pass;
 import net.coderbot.iris.pipeline.transform.PatchShaderType;
-import net.coderbot.iris.pipeline.transform.ShaderTransformer;
 import net.coderbot.iris.pipeline.transform.TransformPatcher;
+import net.coderbot.iris.pipeline.transform.TransformTestSupport;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -42,6 +44,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 
+import static net.coderbot.iris.pipeline.transform.TransformTestSupport.TEX_LM;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -50,8 +53,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @GLCoreTest
 class IrisInstancingGLTest {
-
-    private static final InputAvailability TEX_LM = InputAvailability.of(true, true);
 
     private static final String CUBE_VERTEX = """
         #version 120
@@ -168,21 +169,17 @@ class IrisInstancingGLTest {
 
     @BeforeAll
     static void pinGlslVersion() {
-        previousMaxGlslVersion = RenderSystem.getMaxGlslVersion();
-        Reflect.setStatic(RenderSystem.class, "maxGlslVersion", 330);
-        ShaderTransformer.init();
+        previousMaxGlslVersion = TransformTestSupport.pinGlslVersion(330);
     }
 
     @AfterAll
     static void restoreGlslVersion() {
-        Reflect.setStatic(RenderSystem.class, "maxGlslVersion", previousMaxGlslVersion);
-        ShaderTransformer.init();
+        TransformTestSupport.restoreGlslVersion(previousMaxGlslVersion);
     }
 
     @BeforeEach
     void setUp() {
-        TransformPatcher.clearCache();
-        ShaderTransformer.clearCache();
+        TransformTestSupport.clearCaches();
         GLStateManager.disableBlend();
     }
 
@@ -273,6 +270,8 @@ class IrisInstancingGLTest {
 
         final int program = GLStateManager.glCreateProgram();
         GLStateManager.glUseProgram(program);
+        // Never linked, so the driver rejects the bind; GLSM still tracks it as the active program.
+        assertEquals(GL11.GL_INVALID_OPERATION, GL11.glGetError());
         try {
             final long dc = GLStateManager.drawCalls;
             BatchEligibility.begin(BatchEligibility.SAFE, dc);
@@ -406,15 +405,19 @@ class IrisInstancingGLTest {
             """;
         final String fragmentSource = """
             #version 120
-            uniform int entityId;
-            uniform int blockEntityId;
+            uniform int entityId, blockEntityId;
             uniform int currentRenderedItemId;
             uniform int expectedId;
+            // a parameter and a local sharing the id names keep their own values
+            bool isFortyTwo(int entityId) { return entityId == 42; }
             void main() {
                 bool matches = entityId == expectedId && blockEntityId == expectedId && currentRenderedItemId == expectedId;
-                gl_FragData[0] = matches ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+                bool shadowed = isFortyTwo(42);
+                { int blockEntityId = 7; shadowed = shadowed && blockEntityId == 7; }
+                gl_FragData[0] = matches && shadowed ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
             }
             """;
+        final int[] ids = { -1, 0, 32767, 32768, 45020, 50020, 50072, 65534 };
         final int vao = GLStateManager.glGenVertexArrays();
         final int buffer = GLStateManager.glGenBuffers();
         GLStateManager.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
@@ -435,7 +438,7 @@ class IrisInstancingGLTest {
                     GLStateManager.glEnableVertexAttribArray(InstancedAttribs.LOC_ENTITY);
                     GLStateManager.glVertexAttribDivisor(InstancedAttribs.LOC_ENTITY, 1);
                     final ByteBuffer data = BufferUtils.createByteBuffer(InstancedAttribs.HEAD_SIZE);
-                    for (int id : new int[] { -1, 0, 32767, 32768, 45020, 50020, 50072, 65534 }) {
+                    for (int id : ids) {
                         data.putLong(InstancedAttribs.OFFSET_ENTITY, InstancedAttribs.packEntityInfo(id, id, id));
                         GLStateManager.glBufferData(GL15.GL_ARRAY_BUFFER, data, GL15.GL_STREAM_DRAW);
                         GLStateManager.glUniform1i(GLStateManager.glGetUniformLocation(program, "expectedId"), id);
@@ -451,6 +454,30 @@ class IrisInstancingGLTest {
                     GLStateManager.glUseProgram(0);
                     GLStateManager.glDeleteProgram(program);
                 }
+            }
+
+            final int program = linkProgram("highIdsImmediate", TransformPatcher.patchAttributes(vertexSource, null, null, null, fragmentSource, TEX_LM, false));
+            final ImmediateExtendedAttribHandler previousHandler = GLSMHooks.immediateExtendedHandler;
+            try {
+                EntityIdsOnlyHandler.install();
+                GLStateManager.glUseProgram(program);
+                GLStateManager.glUniform1i(GLStateManager.glGetUniformLocation(program, "iris_currentAlphaFunc"), 7);
+                GLStateManager.glBindVertexArray(vao);
+                for (int id : ids) {
+                    GLStateManager.setEntityIds(id, id, id);
+                    GLStateManager.glUniform1i(GLStateManager.glGetUniformLocation(program, "expectedId"), id);
+                    GLStateManager.glClearColor(0, 0, 0, 1);
+                    GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
+                    GLStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+                    assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "draw error");
+                    final int[] pixel = FfpFixture.readPixel(0, 0);
+                    assertEquals(255, pixel[1], "immediate material ID " + id + " pixel " + Arrays.toString(pixel));
+                }
+            } finally {
+                GLStateManager.glUseProgram(0);
+                GLStateManager.glDeleteProgram(program);
+                GLSMHooks.immediateExtendedHandler = previousHandler;
+                GLStateManager.setEntityIds(-1, 0, -1);
             }
         } finally {
             GLStateManager.glBindVertexArray(0);
@@ -485,10 +512,6 @@ class IrisInstancingGLTest {
     }
 
     private static void compile(int type, String source) {
-        final int shader = GLStateManager.glCreateShader(type);
-        GLStateManager.glShaderSource(shader, source);
-        GLStateManager.glCompileShader(shader);
-        assertEquals(GL11.GL_TRUE, GLStateManager.glGetShaderi(shader, GL20.GL_COMPILE_STATUS), () -> "shader failed to compile:\n" + GLStateManager.glGetShaderInfoLog(shader, 4096) + "\n" + source);
-        GLStateManager.glDeleteShader(shader);
+        GLStateManager.glDeleteShader(GlTestSupport.compile(type, source));
     }
 }
