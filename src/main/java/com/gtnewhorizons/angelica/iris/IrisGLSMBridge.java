@@ -11,6 +11,8 @@ import com.gtnewhorizons.angelica.glsm.hooks.LineDrawHandler;
 import com.gtnewhorizons.angelica.glsm.hooks.ShaderTransformPostProcessor;
 import com.gtnewhorizons.angelica.glsm.shader.ShaderType;
 import org.taumc.glsl.grammar.GLSLParser;
+import com.gtnewhorizons.angelica.glsm.GLSMCurrentAttribs;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.sdlgpu.SDLGPUGate;
 import net.coderbot.iris.Iris;
@@ -67,8 +69,15 @@ public class IrisGLSMBridge {
     public static void installImmediateExtendedHandler() {
         GLSMHooks.immediateExtendedHandler = new ImmediateExtendedAttribs();
         final CapturedRenderingState state = CapturedRenderingState.INSTANCE;
-        state.setEntityIdsListener(() -> GLStateManager.setEntityIds(
-            state.getCurrentRenderedEntity(), state.getCurrentRenderedBlockEntity(), state.getCurrentRenderedItem()));
+        state.setEntityIdsListener(() -> {
+            final boolean suspended = GLStateManager.suspendExitCapture();
+            try {
+                GLSMCurrentAttribs.setEntityIds(
+                    state.getCurrentRenderedEntity(), state.getCurrentRenderedBlockEntity(), state.getCurrentRenderedItem());
+            } finally {
+                GLStateManager.resumeExitCapture(suspended);
+            }
+        });
     }
 
     public static void installPostTransformHook() {
@@ -159,6 +168,11 @@ public class IrisGLSMBridge {
             @Override
             public boolean isAlphaTestLocked() {
                 return Iris.enabled && AlphaTestStorage.isAlphaTestLocked();
+            }
+
+            @Override
+            public boolean isOverrideHeld() {
+                return Iris.enabled && AlphaTestStorage.isOverrideHeld();
             }
 
             @Override
@@ -266,7 +280,7 @@ public class IrisGLSMBridge {
                 programRestoreDeferred = false;
                 final WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
                 if (pipeline instanceof DeferredWorldRenderingPipeline drp && drp.shouldOverrideShaders()) {
-                    drp.restorePassAfterModProgram(GLStateManager.getActiveProgram());
+                    drp.restorePassAfterModProgram(GLSMPrograms.getActiveProgram());
                 }
             }
         });

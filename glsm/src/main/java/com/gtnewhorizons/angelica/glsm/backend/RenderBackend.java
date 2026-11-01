@@ -2,6 +2,7 @@ package com.gtnewhorizons.angelica.glsm.backend;
 
 import com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities;
 import com.gtnewhorizons.angelica.glsm.GLESFormatRemap;
+import com.gtnewhorizons.angelica.glsm.GLSMAttribStack;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import com.gtnewhorizons.angelica.glsm.texture.TextureStaging;
@@ -25,6 +26,8 @@ import java.util.function.Predicate;
  * Abstract rendering backend.
  */
 public abstract class RenderBackend {
+
+    public static final int MAX_FRAMES_IN_FLIGHT = 3;
 
     public void onPostWindowCreate(long window) {}
 
@@ -99,7 +102,7 @@ public abstract class RenderBackend {
 
     static VSyncMode resolveTearFreeMode(VSyncMode preferred, Predicate<VSyncMode> supported) {
         if (preferred != null && preferred.tearFree() && supported.test(preferred)) return preferred;
-        return supported.test(VSyncMode.MAILBOX) ? VSyncMode.MAILBOX : VSyncMode.ON;
+        return VSyncMode.ON;
     }
 
     protected abstract VSyncMode applyVSyncMode(VSyncMode preferred);
@@ -247,7 +250,7 @@ public abstract class RenderBackend {
 
     public void onFrameBegin() {
         if (GLStateManager.takeStateSeedPending()) {
-            GLStateManager.replayStateToBackend();
+            GLSMAttribStack.replayStateToBackend();
         }
     }
 
@@ -457,6 +460,9 @@ public abstract class RenderBackend {
     public abstract void deleteFramebuffers(int framebuffer);
     public abstract void bindFramebuffer(int target, int framebuffer);
     public abstract void framebufferTexture2D(int target, int attachment, int textarget, int texture, int level);
+    public abstract void framebufferTexture1D(int target, int attachment, int textarget, int texture, int level);
+    public abstract void framebufferTexture3D(int target, int attachment, int textarget, int texture, int level, int zoffset);
+    public abstract void framebufferTextureLayer(int target, int attachment, int texture, int level, int layer);
     public abstract void framebufferTexture(int target, int attachment, int texture, int level);
     public abstract int genRenderbuffers();
     public abstract void deleteRenderbuffers(int renderbuffer);

@@ -108,10 +108,6 @@ public class AngelicaConfig {
     @Config.DefaultBoolean(true)
     public static boolean modernizeF3Screen;
 
-    @Config.Comment("Show block registry name and meta value in F3, similar to 1.8+. [From ArchaicFix]")
-    @Config.DefaultBoolean(true)
-    public static boolean showBlockDebugInfo;
-
     @Config.DefaultBoolean(true)
     @Config.Comment("Hide downloading terrain screen. [From ArchaicFix]")
     public static boolean hideDownloadingTerrainScreen;
@@ -167,6 +163,20 @@ public class AngelicaConfig {
     @Config.DefaultBoolean(true)
     public static boolean enableEntityTextureAtlas;
 
+    @Config.Comment("Replay entity draws recorded in the shader shadow pass in the main view instead of running each entity renderer again (experimental, requires entity batching)")
+    @Config.DefaultBoolean(false)
+    @Config.RequiresMcRestart
+    public static boolean enableEntityShadowReplay;
+
+    @Config.Comment("Entity classes that run their renderer again in the main view instead of replaying shadow pass draws. Players are always excluded.")
+    @Config.DefaultStringList({
+        "chylex.hee.entity.boss.EntityBossDragon",
+        "twilightforest.entity.passive.EntityTFMobileFirefly",
+        "gregtech.common.entity.EntityDrone"
+    })
+    @Config.RequiresMcRestart
+    public static String[] entityShadowReplayExcludedClasses;
+
     @Config.Comment("Skip the end-of-frame shader buffer copy by ping-ponging buffers. Disable if a shader pack misrenders.")
     @Config.DefaultBoolean(true)
     @Config.RequiresMcRestart
@@ -191,6 +201,11 @@ public class AngelicaConfig {
     @Config.DefaultBoolean(true)
     @Config.RequiresMcRestart
     public static boolean enableTESRProviderDispatch;
+
+    @Config.Comment("Cache the lightmap the tile-entity dispatcher looks up per tile per frame, refreshing it once a tick")
+    @Config.DefaultBoolean(true)
+    @Config.RequiresMcRestart
+    public static boolean enableTESRLightCache;
 
     @Config.Comment("Enable full RGB color support (16.7M colors) using &#RRGGBB syntax in text")
     @Config.DefaultBoolean(true)
@@ -286,9 +301,9 @@ public class AngelicaConfig {
     @Config.RangeInt(min = 256, max = 1024)
     public static int itemRendererCacheSize;
 
-    @Config.Comment("Render distance for the spinning mob inside mod spawners")
+    @Config.Comment("Render distance for the spinning mob inside mob spawners. Set to 0 to disable rendering.")
     @Config.DefaultDouble(16D)
-    @Config.RangeDouble(min = 16D, max = 64D)
+    @Config.RangeDouble(min = 0D, max = 64D)
     public static double mobSpawnerRenderDistance;
 
     @Config.Comment("Allows unicode languages to use an odd gui scale")
@@ -441,13 +456,14 @@ public class AngelicaConfig {
     @Config.DefaultBoolean(false)
     public static boolean useVanillaChunkTracking;
 
-    @Config.Comment("Disables additional F3 information added by Angelica.")
-    @Config.DefaultBoolean(false)
-    public static boolean disableF3Additions;
-
-    @Config.Comment("Shows developer counters (FFP, streaming, TESR, transfer) on the F3 screen. Toggle in game with F3+V.")
-    @Config.DefaultBoolean(false)
-    public static boolean verboseF3;
+    @Config.Comment({"Size of the F3 text.",
+        "-1 = same as your GUI Scale (default, the size vanilla F3 uses)",
+        "0 = Auto: half the largest size that fits the window",
+        "1-16 = that size",
+        "F3 is never drawn larger than your GUI Scale."})
+    @Config.DefaultInt(-1)
+    @Config.RangeInt(min = -1, max = 16)
+    public static int debugGuiScale;
 
     @Config.Comment("Replaces various FFP uploads with statically allocated VBO's.")
     @Config.DefaultBoolean(true)
@@ -546,6 +562,10 @@ public class AngelicaConfig {
 
     public static boolean cubeInstancingEnabled() {
         return enableEntityBatching && enableCubeInstancing;
+    }
+
+    public static boolean entityShadowReplayEnabled() {
+        return enableEntityBatching && enableEntityShadowReplay;
     }
 
     public static boolean sdlGpuConfigured() {

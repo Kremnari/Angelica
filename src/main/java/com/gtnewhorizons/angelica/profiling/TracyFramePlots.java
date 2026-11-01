@@ -3,10 +3,16 @@ package com.gtnewhorizons.angelica.profiling;
 import com.gtnewhorizons.angelica.dynamiclights.DynamicLights;
 import com.gtnewhorizons.angelica.glsm.CaptureGate;
 import com.gtnewhorizons.angelica.glsm.DisplayListManager;
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMAttribStack;
+import com.gtnewhorizons.angelica.glsm.GLSMBuffers;
+import com.gtnewhorizons.angelica.glsm.GLSMDraws;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
+import com.gtnewhorizons.angelica.glsm.GLSMTextureLifetime;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.glsm.profiling.TracyBackend;
+import com.gtnewhorizons.angelica.glsm.streaming.PersistentStreamingBuffer;
 import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
 import com.gtnewhorizons.angelica.rendering.AngelicaRenderQueue;
 import com.gtnewhorizons.angelica.rendering.FramePacer;
@@ -34,6 +40,8 @@ public final class TracyFramePlots {
     private static final PlotDelta P_GL_DRAW_CALLS = new PlotDelta("gl.drawCalls");
     private static final PlotDelta P_GL_TEX_BIND_MISSES = new PlotDelta("gl.texBindMisses");
     private static final PlotDelta P_GL_PROGRAM_SWITCHES = new PlotDelta("gl.programSwitches");
+    private static final long P_GL_TEX_AWAITING_RELEASE = Tracy.plotHandle("gl.texAwaitingRelease");
+    private static final PlotDelta P_GLSM_BUFFER_DELETES = new PlotDelta("glsm.bufferDeletes");
     private static final PlotDelta P_GLSM_BRACKETS = new PlotDelta("glsm.brackets");
     private static final PlotDelta P_GLSM_COW_SLOTS = new PlotDelta("glsm.cowSlots");
     private static final PlotDelta P_GLSM_POP_RESTORES = new PlotDelta("glsm.popRestores");
@@ -45,6 +53,7 @@ public final class TracyFramePlots {
     private static final PlotDelta P_GL_ORPHAN_FALLBACKS = new PlotDelta("gl.orphanFallbacks");
     private static final PlotDelta P_GL_STREAM_CONTIGUOUS = new PlotDelta("gl.streamContiguous");
     private static final PlotDelta P_GL_RING_WRAPS = new PlotDelta("gl.ringWraps");
+    private static final PlotDelta P_GL_ALL_RING_FENCES = new PlotDelta("gl.allRingFences");
     private static final long P_GL_SECTION_META_BYTES = Tracy.plotHandle("gl.sectionMetaBytes", TracyBackend.PLOT_FORMAT_MEMORY);
 
     private static final long P_SHADOW_RELAY_FRAMES = Tracy.plotHandle("shadow.relayFrames");
@@ -55,6 +64,7 @@ public final class TracyFramePlots {
     private static final long P_VOX_RANGES = Tracy.plotHandle("voxelization.ranges");
     private static final long P_VOX_REGIONS = Tracy.plotHandle("voxelization.regions");
     private static final long P_DRAW_BATCH_REBUILDS = Tracy.plotHandle("draw.batchRebuilds");
+    private static final long P_DRAW_BATCH_REBUILDS_TRANSLUCENT = Tracy.plotHandle("draw.batchRebuilds.translucent");
     private static final PlotDelta P_DRAW_INDEX_BUFFER_GROWTHS = new PlotDelta("draw.indexBufferGrowths");
 
     private static final long P_CULL_COMMANDS_SUBMITTED = Tracy.plotHandle("cull.commandsSubmitted");
@@ -186,25 +196,29 @@ public final class TracyFramePlots {
             Tracy.plotInt(P_ENTITIES_TOTAL, mc.theWorld.loadedEntityList.size());
         }
 
-        P_GL_DRAW_CALLS.plot(GLStateManager.drawCalls);
-        P_GL_TEX_BIND_MISSES.plot(GLStateManager.texBindMisses);
-        P_GL_PROGRAM_SWITCHES.plot(GLStateManager.programSwitches);
-        P_GLSM_BRACKETS.plot(GLStateManager.attribPushes);
-        P_GLSM_COW_SLOTS.plot(GLStateManager.attribSlotsSaved);
-        P_GLSM_POP_RESTORES.plot(GLStateManager.attribValueRestores);
-        P_GLSM_POP_GL_CALLS.plot(GLStateManager.attribBackendCalls);
-        P_GLSM_POP_DISCARDS.plot(GLStateManager.attribDiscards);
+        P_GL_DRAW_CALLS.plot(GLSMDraws.drawCalls);
+        P_GL_TEX_BIND_MISSES.plot(GLSMTextures.texBindMisses);
+        P_GL_PROGRAM_SWITCHES.plot(GLSMPrograms.programSwitches);
+        Tracy.plotInt(P_GL_TEX_AWAITING_RELEASE, GLSMTextureLifetime.deferredTexturesAwaitingRelease());
+        P_GLSM_BUFFER_DELETES.plot(GLSMBuffers.bufferDeletes);
+        P_GLSM_BRACKETS.plot(GLSMAttribStack.attribPushes);
+        P_GLSM_COW_SLOTS.plot(GLSMAttribStack.attribSlotsSaved);
+        P_GLSM_POP_RESTORES.plot(GLSMAttribStack.attribValueRestores);
+        P_GLSM_POP_GL_CALLS.plot(GLSMAttribStack.attribBackendCalls);
+        P_GLSM_POP_DISCARDS.plot(GLSMAttribStack.attribDiscards);
         P_GL_LIST_PLAYBACKS.plot(DisplayListManager.listPlaybacks);
         P_GL_STREAMED_BYTES.plot(TessellatorStreamingDrawer.streamedBytes);
         P_GL_STREAM_DRAWS.plot(TessellatorStreamingDrawer.streamDraws);
         P_GL_ORPHAN_FALLBACKS.plot(TessellatorStreamingDrawer.orphanFallbacks);
         P_GL_STREAM_CONTIGUOUS.plot(TessellatorStreamingDrawer.streamContiguous);
         P_GL_RING_WRAPS.plot(TessellatorStreamingDrawer.ringWraps());
+        P_GL_ALL_RING_FENCES.plot(PersistentStreamingBuffer.getFencesIssuedByAllRings());
         Tracy.plotInt(P_GL_SECTION_META_BYTES, TerrainDrawStats.takeSectionMetaBytes());
         Tracy.plotInt(P_SHADOW_RELAY_FRAMES, ShadowRenderer.SHADOW_TERRAIN_RELAID ? 1 : 0);
         Tracy.plotInt(P_TERRAIN_DRAW_COMMANDS, TerrainDrawStats.takeCommandsSubmitted());
         Tracy.plotInt(P_TERRAIN_REGIONS_DRAWN, TerrainDrawStats.takeRegionsDrawn());
         Tracy.plotInt(P_DRAW_BATCH_REBUILDS, TerrainDrawStats.takeBatchRebuilds());
+        Tracy.plotInt(P_DRAW_BATCH_REBUILDS_TRANSLUCENT, TerrainDrawStats.takeBatchRebuildsTranslucent());
         Tracy.plotInt(P_VOX_ENCODERS, SdlShadowVoxelizationSink.takeEncoders());
         Tracy.plotInt(P_VOX_RANGES, SdlShadowVoxelizationSink.takeRanges());
         Tracy.plotInt(P_VOX_REGIONS, SdlShadowVoxelizationSink.takeRegions());

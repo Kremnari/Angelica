@@ -42,6 +42,7 @@ import me.jellysquid.mods.sodium.client.gui.options.named.BiomeBlendMode;
 import me.jellysquid.mods.sodium.client.gui.options.named.GraphicsMode;
 import me.jellysquid.mods.sodium.client.gui.options.named.GraphicsQuality;
 import me.jellysquid.mods.sodium.client.gui.options.named.LightingQuality;
+import me.jellysquid.mods.sodium.client.gui.options.named.MipmapGeneration;
 import me.jellysquid.mods.sodium.client.gui.options.named.MultiDrawMode;
 import me.jellysquid.mods.sodium.client.gui.options.named.ParticleMode;
 import me.jellysquid.mods.sodium.client.gui.options.named.TexelSampling;
@@ -286,6 +287,15 @@ public class SodiumGameOptionPages {
                 .add(texelSampling)
                 .add(anisotropicFilteringSlider(vanillaOpts, textureFilterMode::getValue),
                     SodiumGameOptions.anisotropySupported())
+                .add(OptionImpl.createBuilder(int.class, sodiumOpts)
+                    .setName(I18n.format("sodium.options.gui_block_supersampling.name"))
+                    .setTooltip(I18n.format("sodium.options.gui_block_supersampling.tooltip"))
+                    .setControl(option -> new SliderControl(option, 0, 4, 1,
+                        value -> value == 0 ? I18n.format("options.off") : (1 << value) + "x"))
+                    .setBinding((opts, value) -> opts.quality.guiBlockSupersampling = 1 << value,
+                        opts -> Integer.numberOfTrailingZeros(opts.quality.guiBlockSupersampling))
+                    .setImpact(OptionImpact.LOW)
+                    .build())
                 .add(biomeBlendRadius)
                 .add(biomeBlendMode)
                 // TODO
@@ -304,6 +314,14 @@ public class SodiumGameOptionPages {
 
         groups.add(OptionGroup.createBuilder()
                 .add(mipmapLevels)
+                .add(OptionImpl.createBuilder(MipmapGeneration.class, sodiumOpts)
+                    .setName(I18n.format("sodium.options.mipmap_generation.name"))
+                    .setTooltip(I18n.format("sodium.options.mipmap_generation.tooltip"))
+                    .setControl(option -> new CyclingControl<>(option, MipmapGeneration.class))
+                    .setBinding((opts, value) -> opts.quality.mipmapGeneration = value, opts -> opts.quality.mipmapGeneration)
+                    .setImpact(OptionImpact.LOW)
+                    .setFlags(OptionFlag.REQUIRES_ASSET_RELOAD)
+                    .build())
                 .build());
         groups.add(OptionGroup.createBuilder()
         .add(Settings.MODE_GLINT_INV.option)
@@ -643,7 +661,7 @@ public class SodiumGameOptionPages {
                 .add(OptionImpl.createBuilder(int.class, angelicaOpts)
                         .setName(I18n.format("options.angelica.mobSpawnerRenderDistance"))
                         .setTooltip(I18n.format("options.angelica.mobSpawnerRenderDistance.tooltip"))
-                        .setControl(option -> new SliderControl(option, 16, 64, 1, ControlValueFormatter.number()))
+                        .setControl(option -> new SliderControl(option, 0, 64, 1, ControlValueFormatter.number()))
                         .setBinding((options, value) -> AngelicaConfig.mobSpawnerRenderDistance = value, options -> (int) AngelicaConfig.mobSpawnerRenderDistance)
                         .setImpact(OptionImpact.MEDIUM)
                         .build())
@@ -756,7 +774,6 @@ public class SodiumGameOptionPages {
                 (opts, value) -> opts.anisotropicFiltering = 1 << MathHelper.clamp_int(value, min, max),
                 opts -> MathHelper.clamp_int(Integer.numberOfTrailingZeros(Math.max(opts.anisotropicFiltering, 1)), min, max))
             .setImpact(OptionImpact.MEDIUM)
-            .setFlags(OptionFlag.REQUIRES_ASSET_RELOAD)
             .build();
 
         option.iris$dynamicallyEnable(() -> mode.get().usesAnisotropy() && SodiumGameOptions.hasAnisotropyRange());
@@ -824,18 +841,6 @@ public class SodiumGameOptionPages {
                         .setImpact(OptionImpact.HIGH)
                         .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
                         .setEnabled(NotFineConfig.allowToggle3DAnaglyph)
-                        .build())
-                .add(OptionImpl.createBuilder(boolean.class, angelicaOpts)
-                        .setName(I18n.format("options.angelica.disablef3"))
-                        .setTooltip(I18n.format("options.angelica.disablef3.tooltip"))
-                        .setControl(TickBoxControl::new)
-                        .setBinding((opts, value) -> AngelicaConfig.disableF3Additions = value, opts -> AngelicaConfig.disableF3Additions)
-                        .build())
-                .add(OptionImpl.createBuilder(boolean.class, angelicaOpts)
-                        .setName(I18n.format("options.angelica.verbosef3"))
-                        .setTooltip(I18n.format("options.angelica.verbosef3.tooltip"))
-                        .setControl(TickBoxControl::new)
-                        .setBinding((opts, value) -> AngelicaConfig.verboseF3 = value, opts -> AngelicaConfig.verboseF3)
                         .build())
                 .build());
 

@@ -1,5 +1,6 @@
 package com.gtnewhorizons.angelica.rendering.celeritas;
 
+import com.gtnewhorizons.angelica.debug.screen.DebugScreenEntries;
 import com.cardinalstar.cubicchunks.world.ICubicWorld;
 import com.gtnewhorizons.angelica.client.rendering.AngelicaFogService;
 import com.gtnewhorizons.angelica.compat.ModStatus;
@@ -16,7 +17,6 @@ import com.gtnewhorizons.angelica.rendering.celeritas.world.WorldSlice;
 import com.gtnewhorizons.angelica.rendering.celeritas.world.cloned.ClonedChunkSectionCache;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.world.chunk.Chunk;
@@ -55,6 +55,8 @@ public class AngelicaRenderSectionManager extends RenderSectionManager {
     private static final long P_DRAW_REGION_BUFFERS = Tracy.plotHandle("draw.regionBuffers");
     private static final long P_MESH_DEVICE_ALLOCATED = Tracy.plotHandle("mesh.deviceAllocated", TracyBackend.PLOT_FORMAT_MEMORY);
     private static final long P_MESH_DEFERRED_PENDING = Tracy.plotHandle("mesh.deferredPending");
+    private static final long P_MESH_DEFERRED_FINISHING = Tracy.plotHandle("mesh.deferredFinishing");
+    private static final long P_MESH_DEFERRED_FREE_SLICES = Tracy.plotHandle("mesh.deferredFreeSlices");
 
     private static final Tracy.ZoneId Z_BIOME_REBUILDS = Tracy.zoneId("biomeRebuilds", Tracy.COLOR_TERRAIN);
     private static final Tracy.ZoneId Z_GRAPH_SEARCH = Tracy.zoneId("graphSearch", Tracy.COLOR_TERRAIN);
@@ -72,7 +74,7 @@ public class AngelicaRenderSectionManager extends RenderSectionManager {
         this.world = world;
         this.sectionCache = new ClonedChunkSectionCache(world);
         this.taskProvider = taskProvider;
-        this.deferredScheduler = new DeferredMeshScheduler(configuration, () -> new AngelicaChunkBuildContext(configuration, world), () -> new WorldSlice(world), AngelicaRenderQueue::submit, ((RenderSectionManagerAccessor) this).angelica$getBuildResults());
+        this.deferredScheduler = new DeferredMeshScheduler(configuration, getBuilder(), () -> new WorldSlice(world), AngelicaRenderQueue::submit, AngelicaRenderQueue::remove, ((RenderSectionManagerAccessor) this).angelica$getBuildResults());
     }
 
     public static AngelicaRenderSectionManager create(ChunkVertexType vertexType, WorldClient world, int renderDistance, CommandList commandList) {
@@ -118,7 +120,7 @@ public class AngelicaRenderSectionManager extends RenderSectionManager {
 
     @Override
     protected boolean isDebugInfoShown() {
-        return Minecraft.getMinecraft().gameSettings.showDebugInfo;
+        return DebugScreenEntries.ANGELICA_RENDERER.isEnabled();
     }
 
     @Override
@@ -210,6 +212,7 @@ public class AngelicaRenderSectionManager extends RenderSectionManager {
     @Override
     public void updateChunks(boolean updateImmediately) {
         this.sectionCache.cleanup();
+        this.deferredScheduler.trimPools();
         this.flushBiomeRebuilds();
         if (Tracy.ENABLED) Tracy.beginZone(Z_GRAPH_SEARCH);
         try {
@@ -225,6 +228,7 @@ public class AngelicaRenderSectionManager extends RenderSectionManager {
         this.deferredScheduler.markDestroyed();
         super.destroy();
         this.deferredScheduler.runImportant();
+        this.deferredScheduler.releaseOrphans();
     }
 
     @Override
@@ -350,5 +354,7 @@ public class AngelicaRenderSectionManager extends RenderSectionManager {
         Tracy.plotInt(P_MESH_DEVICE_ALLOCATED, mem.deviceAllocated + mem.indexAllocated);
         Tracy.plotInt(P_DRAW_REGION_BUFFERS, mem.bufferCount);
         Tracy.plotInt(P_MESH_DEFERRED_PENDING, this.deferredScheduler.pendingCount());
+        Tracy.plotInt(P_MESH_DEFERRED_FINISHING, this.deferredScheduler.finishingCount());
+        Tracy.plotInt(P_MESH_DEFERRED_FREE_SLICES, this.deferredScheduler.freeSliceCount());
     }
 }

@@ -2,6 +2,7 @@ package com.gtnewhorizons.angelica.glsm.redirect;
 
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.config.SystemProperties.UnmappedGLMode;
+import com.gtnewhorizons.angelica.glsm.testutil.GlsmClasses;
 import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,7 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
@@ -21,7 +23,12 @@ import org.objectweb.asm.tree.MethodNode;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GLSMRedirectorTest {
 
-    private static final String GLSM = GLSMRedirector.getTargetClassName();
+    private static final String GLSM = "com/gtnewhorizons/angelica/glsm/GLStateManager";
 
     private static Set<String> unmappedSeen() { return Reflect.getStatic(GLSMRedirector.class, "UNMAPPED_SEEN"); }
     private static Set<String> debugSeen() { return Reflect.getStatic(GLSMRedirector.class, "DEBUG_SEEN"); }
@@ -115,7 +122,7 @@ class GLSMRedirectorTest {
 
         assertTrue(changed);
         final Handle result = getResultHandle(cn);
-        assertEquals(GLSM, result.getOwner());
+        assertEquals(GLSMRedirector.getTargetOwner(expectedName), result.getOwner());
         assertEquals(expectedName, result.getName());
         assertEquals(desc, result.getDesc());
         assertEquals(Opcodes.H_INVOKESTATIC, result.getTag());
@@ -211,14 +218,104 @@ class GLSMRedirectorTest {
         final ClassNode cn = makeClassWithMethodCall(owner, name, desc);
         final boolean changed = new GLSMRedirector().transformClassNode("com.example.TestClass", cn);
         assertTrue(changed, owner + "." + name + " should redirect");
-        assertEquals(GLSM, firstCall(cn).owner);
+        assertEquals(GLSMRedirector.getTargetOwner(expectedName), firstCall(cn).owner);
         assertEquals(expectedName, firstCall(cn).name);
         assertTrue(unmappedSeen().isEmpty(), owner + "." + name + " should not be recorded");
         return firstCall(cn);
     }
 
+    @Test
+    void ownerIndexAndSearchStrings() {
+        assertFalse(GLSMRedirector.getNamedClassMethodRedirects().containsKey(GLSM));
+        assertTrue(Arrays.asList(new GLSMRedirector().getConstantPoolSearchStrings()).contains(GLSM));
+        assertEquals("com/gtnewhorizons/angelica/glsm/GLSMMatrices", GLSMRedirector.getTargetOwner("glPushMatrix"));
+    }
+
+    @Test
+    void ownerTableMatchesGlsmClasses() {
+        final Map<String, List<String>> methods = new TreeMap<>();
+        final Map<String, List<String>> fields = new TreeMap<>();
+        for (String type : GlsmClasses.packageClasses()) {
+            if (type.equals(GLSM)) continue;
+            final ClassNode node = GlsmClasses.load(type);
+            final List<String> m = node.methods.stream().filter(x -> isPublicStatic(x.access)).map(x -> x.name).distinct().sorted().toList();
+            final List<String> f = node.fields.stream().filter(x -> isPublicStatic(x.access)).map(x -> x.name).sorted().toList();
+            if (!m.isEmpty()) methods.put(type, m);
+            if (!f.isEmpty()) fields.put(type, f);
+        }
+        final String expected = renderTable("METHODS", methods) + "\n" + renderTable("FIELDS", fields);
+        final String actual = renderTable("METHODS", rows(GLSMOwners.METHODS)) + "\n" + renderTable("FIELDS", rows(GLSMOwners.FIELDS));
+        assertEquals(expected, actual, "GLSMOwners is out of date. Replace its tables with:\n" + expected);
+    }
+
+    @Test
+    void everyRedirectTargetResolves() {
+        final List<String> missing = new ArrayList<>();
+        for (String target : GLSMRedirector.redirectTargets()) {
+            final String owner = GLSMRedirector.getTargetOwner(target);
+            if (GlsmClasses.load(owner).methods.stream().noneMatch(m -> m.name.equals(target) && isPublicStatic(m.access))) missing.add(owner + "." + target);
+        }
+        assertTrue(missing.isEmpty(), "Redirect targets not declared: " + missing);
+        for (String name : GLSMRedirector.CORE_REWRITE_TARGETS) {
+            assertEquals(GLSM, GLSMRedirector.getTargetOwner(name), name);
+        }
+    }
+
+    private static boolean isPublicStatic(int access) {
+        return (access & Opcodes.ACC_PUBLIC) != 0 && (access & Opcodes.ACC_STATIC) != 0 && (access & Opcodes.ACC_SYNTHETIC) == 0;
+    }
+
+    private static Map<String, List<String>> rows(String[][] table) {
+        final Map<String, List<String>> rows = new LinkedHashMap<>();
+        for (String[] row : table) rows.put(row[0], Arrays.asList(row).subList(1, row.length));
+        return rows;
+    }
+
+    private static String renderTable(String name, Map<String, List<String>> rows) {
+        if (rows.isEmpty()) return "    static final String[][] " + name + " = {};\n";
+        final StringBuilder out = new StringBuilder("    static final String[][] " + name + " = {\n");
+        for (Map.Entry<String, List<String>> row : rows.entrySet()) {
+            out.append("        {\"").append(row.getKey()).append("\",\n");
+            StringBuilder line = new StringBuilder("            ");
+            final List<String> names = row.getValue();
+            for (int i = 0; i < names.size(); i++) {
+                final String token = "\"" + names.get(i) + "\"" + (i == names.size() - 1 ? "}," : ",");
+                if (line.length() > 12 && line.length() + 1 + token.length() > 120) {
+                    out.append(line).append('\n');
+                    line = new StringBuilder("            ");
+                }
+                if (line.length() > 12) line.append(' ');
+                line.append(token);
+            }
+            out.append(line).append('\n');
+        }
+        return out.append("    };\n").toString();
+    }
+
+    @Test
+    void legacyOwnerIsRewrittenToItsGroup() {
+        final String fogStateDesc = "()Lcom/gtnewhorizons/angelica/glsm/stacks/FogStateStack;";
+        final ClassNode moved = makeClassWithMethodCall(GLSM, "getFogState", fogStateDesc);
+        assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", moved));
+        assertEquals("com/gtnewhorizons/angelica/glsm/GLSMFog", firstCall(moved).owner);
+
+        final ClassNode core = makeClassWithMethodCall(GLSM, "ctx", "()Lcom/gtnewhorizons/angelica/glsm/GLContextState;");
+        assertFalse(new GLSMRedirector().transformClassNode("com.example.TestClass", core));
+        assertEquals(GLSM, firstCall(core).owner);
+
+        final ClassNode field = makeClassWithMethodCall("java/lang/Object", "hashCode", "()I");
+        final FieldInsnNode read = new FieldInsnNode(Opcodes.GETSTATIC, GLSM, "DEFAULT_DRAW_BUFFER", "I");
+        field.methods.get(0).instructions.insert(read);
+        assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", field));
+        assertEquals("com/gtnewhorizons/angelica/glsm/GLSMFramebuffer", read.owner);
+
+        final ClassNode handle = makeClassWithInvokeDynamic(new Handle(Opcodes.H_INVOKESTATIC, GLSM, "getFogState", fogStateDesc, false));
+        assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", handle));
+        assertEquals("com/gtnewhorizons/angelica/glsm/GLSMFog", getResultHandle(handle).getOwner());
+    }
+
     private static boolean glsmDeclares(String name, String desc) throws ClassNotFoundException {
-        final Class<?> glsm = Class.forName(GLSM.replace('/', '.'), false, GLSMRedirectorTest.class.getClassLoader());
+        final Class<?> glsm = Class.forName(GLSMRedirector.getTargetOwner(name).replace('/', '.'), false, GLSMRedirectorTest.class.getClassLoader());
         for (Method m : glsm.getDeclaredMethods()) {
             final int mods = m.getModifiers();
             if (!Modifier.isPublic(mods) || !Modifier.isStatic(mods) || !m.getName().equals(name)) continue;
@@ -230,6 +327,7 @@ class GLSMRedirectorTest {
     @ParameterizedTest(name = "{0}.{1}{2}")
     @CsvSource(delimiter = '|', value = {
         "org/lwjgl/opengl/EXTFramebufferObject | glBindFramebufferEXT | (II)V | glBindFramebuffer",
+        "org/lwjgl/opengl/EXTFramebufferObject | glFramebufferTexture3DEXT | (IIIIII)V | glFramebufferTexture3D",
         "org/lwjgl/opengl/ARBFramebufferObject | glGenerateMipmap | (I)V | glGenerateMipmap",
         "org/lwjgl/opengl/EXTFramebufferObject | glGenerateMipmapEXT | (I)V | glGenerateMipmap",
         "org/lwjgl/opengl/GL11 | glReadPixels | (IIIIIILjava/nio/IntBuffer;)V | glReadPixels",
@@ -261,9 +359,15 @@ class GLSMRedirectorTest {
         "org/lwjgl/opengl/GL11 | glLoadMatrixf | (Ljava/nio/FloatBuffer;)V | glLoadMatrix",
         "org/lwjgl/opengl/ARBVertexArrayObject | glGenVertexArrays | ()I | glGenVertexArrays",
         "org/lwjgl/opengl/APPLEVertexArrayObject | glGenVertexArraysAPPLE | ()I | glGenVertexArrays",
+        "org/lwjgl/opengl/ARBGeometryShader4 | glFramebufferTextureFaceARB | (IIIII)V | glFramebufferTextureFace",
+        "org/lwjgl/opengl/EXTGeometryShader4 | glFramebufferTextureEXT | (IIII)V | glFramebufferTexture",
+        "org/lwjgl/opengl/EXTTextureArray | glFramebufferTextureLayerEXT | (IIIII)V | glFramebufferTextureLayer",
+        "org/lwjgl/opengl/EXTShaderImageLoadStore | glBindImageTextureEXT | (IIIZIII)V | glBindImageTexture",
+        "org/lwjgl/opengl/EXTFramebufferObject | glDeleteFramebuffersEXT | (Ljava/nio/IntBuffer;)V | glDeleteFramebuffers",
     })
-    void aliasIsRedirected(String owner, String name, String desc, String expectedName) {
+    void aliasIsRedirected(String owner, String name, String desc, String expectedName) throws ClassNotFoundException {
         assertEquals(desc, assertRedirected(owner, name, desc, expectedName).desc);
+        assertTrue(glsmDeclares(expectedName, desc), () -> GLSMRedirector.getTargetOwner(expectedName) + " lacks " + expectedName + desc);
         assertTrue(debugSeen().isEmpty());
     }
 
@@ -303,6 +407,37 @@ class GLSMRedirectorTest {
         "org/lwjgl/opengl/ARBSamplerObjects | glSamplerParameteri | (III)V",
         "org/lwjgl/opengl/ARBSamplerObjects | glSamplerParameterf | (IIF)V",
         "org/lwjgl/opengl/GL43 | glGetDebugMessageLog | (ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/ByteBuffer;)I",
+        "org/lwjgl/opengl/GL30 | glFramebufferTexture1D | (IIIII)V",
+        "org/lwjgl/opengl/GL30 | glFramebufferTexture3D | (IIIIII)V",
+        "org/lwjgl/opengl/GL30 | glFramebufferTextureLayer | (IIIII)V",
+        "org/lwjgl/opengl/GL30C | glDeleteFramebuffers | ([I)V",
+        "org/lwjgl/opengl/GL11C | glDeleteTextures | ([I)V",
+        "org/lwjgl/opengl/GL11C | glGenTextures | ([I)V",
+        "org/lwjgl/opengl/GL44 | glBindTextures | (IILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL44C | glBindTextures | (ILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL44 | glBindTextures | (I[I)V",
+        "org/lwjgl/opengl/GL44 | glBindImageTextures | (IILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL44C | glBindImageTextures | (ILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL44 | glBindImageTextures | (I[I)V",
+        "org/lwjgl/opengl/GL45 | glBindTextureUnit | (II)V",
+        "org/lwjgl/opengl/GL45 | glCreateTextures | (I)I",
+        "org/lwjgl/opengl/GL45C | glCreateTextures | (ILjava/nio/IntBuffer;)V",
+        "org/lwjgl/opengl/GL45C | glCreateTextures | (I[I)V",
+        "org/lwjgl/opengl/GL45 | glNamedFramebufferTexture | (IIII)V",
+        "org/lwjgl/opengl/GL45 | glNamedFramebufferTextureLayer | (IIIII)V",
+        "org/lwjgl/opengl/ARBDirectStateAccess | glNamedFramebufferRenderbuffer | (IIII)V",
+        "org/lwjgl/opengl/EXTDirectStateAccess | glNamedFramebufferTexture1DEXT | (IIIII)V",
+        "org/lwjgl/opengl/EXTDirectStateAccess | glNamedFramebufferTexture2DEXT | (IIIII)V",
+        "org/lwjgl/opengl/EXTDirectStateAccess | glNamedFramebufferTexture3DEXT | (IIIIII)V",
+        "org/lwjgl/opengl/EXTDirectStateAccess | glNamedFramebufferTextureEXT | (IIII)V",
+        "org/lwjgl/opengl/EXTDirectStateAccess | glNamedFramebufferTextureFaceEXT | (IIIII)V",
+        "org/lwjgl/opengl/EXTDirectStateAccess | glBindMultiTextureEXT | (III)V",
+        "org/lwjgl/opengl/ARBShaderImageLoadStore | glBindImageTexture | (IIIZIII)V",
+        "org/lwjgl/opengl/GL30 | glEnablei | (II)V",
+        "org/lwjgl/opengl/GL30 | glDisablei | (II)V",
+        "org/lwjgl/opengl/GL33C | glEnablei | (II)V",
+        "org/lwjgl/opengl/GL33C | glDisablei | (II)V",
+        "org/lwjgl/opengl/GL43 | glCopyImageSubData | (IIIIIIIIIIIIIII)V",
     })
     void redirectsToADeclaredGlsmTarget(String owner, String name, String desc) throws ClassNotFoundException {
         for (boolean aware : new boolean[]{false, true}) {
@@ -310,10 +445,10 @@ class GLSMRedirectorTest {
             final ClassNode cn = makeClassWithMethodCall(owner, name, desc);
             assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, aware), call);
             final MethodInsnNode target = firstCall(cn);
-            assertEquals(GLSM, target.owner, call);
+            assertEquals(GLSMRedirector.getTargetOwner(name), target.owner, call);
             assertEquals(name, target.name, call);
             assertEquals(desc, target.desc, call);
-            assertTrue(glsmDeclares(target.name, target.desc), () -> "GLStateManager lacks the target of " + call);
+            assertTrue(glsmDeclares(target.name, target.desc), () -> target.owner + " lacks the target of " + call);
         }
         assertTrue(unmappedSeen().isEmpty(), () -> "unexpected reports: " + unmappedSeen());
     }
@@ -347,7 +482,7 @@ class GLSMRedirectorTest {
 
         assertTrue(new GLSMRedirector().transformClassNode("com.example.TestClass", cn, true));
 
-        assertEquals(AWARE_SHIM, firstCall(cn).owner, "GLStateManager cannot carry an org.lwjgl-typed descriptor for an aware caller");
+        assertEquals(AWARE_SHIM, firstCall(cn).owner, "GLSM cannot carry an org.lwjgl-typed descriptor for an aware caller");
         assertEquals(name, firstCall(cn).name);
     }
 

@@ -1,6 +1,6 @@
 package com.gtnewhorizons.angelica.mixins.early.angelica.animation;
 
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.mixins.interfaces.IPatchedTextureAtlasSprite;
 import com.gtnewhorizons.angelica.proxy.ClientProxy;
 import net.minecraft.client.Minecraft;
@@ -32,20 +32,11 @@ public abstract class MixinTextureMap extends AbstractTexture {
         final boolean renderVisible = ClientProxy.options().performance.animateOnlyVisibleTextures;
 
         Minecraft.getMinecraft().mcProfiler.startSection("updateAnimations");
-        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, this.getGlTextureId());
+        GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, this.getGlTextureId());
 
         final int size = listAnimatedSprites.size();
         for (int i = 0; i < size; i++) {
-            final TextureAtlasSprite sprite = listAnimatedSprites.get(i);
-            final IPatchedTextureAtlasSprite patched = (IPatchedTextureAtlasSprite) sprite;
-
-            // needsAnimationUpdate() is one-shot: returns true if marked, then auto-resets
-            if (!renderVisible || patched.angelica$needsAnimationUpdate()) {
-                sprite.updateAnimation();
-            } else {
-                // Keep frame counters in sync for sprites not being updated
-                patched.angelica$updateAnimationsDryRun();
-            }
+            ((IPatchedTextureAtlasSprite) listAnimatedSprites.get(i)).angelica$tickAnimation(renderVisible);
         }
         Minecraft.getMinecraft().mcProfiler.endSection();
     }

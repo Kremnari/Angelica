@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.glsm;
 import com.gtnewhorizon.gtnhlib.client.renderer.stacks.IStateStack;
 import it.unimi.dsi.fastutil.ints.Int2IntMap;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import com.gtnewhorizons.angelica.glsm.stacks.AlphaStateStack;
 import com.gtnewhorizons.angelica.glsm.stacks.BlendStateStack;
 import com.gtnewhorizons.angelica.glsm.stacks.BooleanStateStack;
@@ -58,6 +59,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class GLContextState {
+    final ExitStateCapture exitCapture = new ExitStateCapture(this);
     private final List<IStateStack<?>> allStacksBuilder = new ArrayList<>();
     public IStateStack<?>[] allStacks;
     final List<BooleanStateStack> allBooleanStates = new ArrayList<>();
@@ -159,7 +161,7 @@ public class GLContextState {
     public final BooleanStateStack colorSumState = track(new BooleanStateStack(GL14.GL_COLOR_SUM, false, true));
     public final Color4Stack clearColor = member(new Color4Stack(StackIdAllocator.nextId(), new Color4(0.0F, 0.0F, 0.0F, 0.0F)).restoreBit(StateSet.R_CLEAR_COLOR));
     public final ColorMaskStack colorMask = member(new ColorMaskStack(StackIdAllocator.nextId()));
-    public final IntegerStateStack drawBuffer = member(new IntegerStateStack(GLStateManager.DEFAULT_DRAW_BUFFER, StackIdAllocator.nextId()).restoreBit(StateSet.R_DRAW_BUFFER));
+    public final IntegerStateStack drawBuffer = member(new IntegerStateStack(GLSMFramebuffer.DEFAULT_DRAW_BUFFER, StackIdAllocator.nextId()).restoreBit(StateSet.R_DRAW_BUFFER));
     public final IntegerStateStack logicOpMode = member(new IntegerStateStack(GL11.GL_COPY, StackIdAllocator.nextId()).restoreBit(StateSet.R_LOGIC_OP));
     public final BooleanStateStack cullState = track(new BooleanStateStack(GL11.GL_CULL_FACE));
     public final AlphaState restoredAlphaScratch = new AlphaState();
@@ -243,12 +245,12 @@ public class GLContextState {
     public final int[] storageBufferBindings = new int[GLStateManager.INDEXED_BUFFER_SLOTS];
     public PixelStoreState pixelUnpackState = PixelStoreState.DEFAULT;
     public PixelStoreState pixelPackState = PixelStoreState.DEFAULT;
-    public final int[] clientAttribSavedMask = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
-    public final PixelStoreState[] clientAttribSavedPixelUnpack = new PixelStoreState[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
-    public final PixelStoreState[] clientAttribSavedPixelPack = new PixelStoreState[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
-    public final int[] clientAttribSavedUnpackBuffer = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
-    public final int[] clientAttribSavedPackBuffer = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
-    public final VAOManager.ClientArrays[] clientAttribSavedArrays = new VAOManager.ClientArrays[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
+    public final int[] clientAttribSavedMask = new int[GLSMAttribStack.CLIENT_ATTRIB_STACK_DEPTH];
+    public final PixelStoreState[] clientAttribSavedPixelUnpack = new PixelStoreState[GLSMAttribStack.CLIENT_ATTRIB_STACK_DEPTH];
+    public final PixelStoreState[] clientAttribSavedPixelPack = new PixelStoreState[GLSMAttribStack.CLIENT_ATTRIB_STACK_DEPTH];
+    public final int[] clientAttribSavedUnpackBuffer = new int[GLSMAttribStack.CLIENT_ATTRIB_STACK_DEPTH];
+    public final int[] clientAttribSavedPackBuffer = new int[GLSMAttribStack.CLIENT_ATTRIB_STACK_DEPTH];
+    public final VAOManager.ClientArrays[] clientAttribSavedArrays = new VAOManager.ClientArrays[GLSMAttribStack.CLIENT_ATTRIB_STACK_DEPTH];
     public int clientAttribStackPointer = 0;
     public int restoreChangedMask;
     public long restoreUnitChangedMask;
@@ -257,6 +259,7 @@ public class GLContextState {
     public boolean vanillaBlendEnabledBefore;
     public int drawFramebuffer = 0;
     public int readFramebuffer = 0;
+    public final Int2ObjectOpenHashMap<int[]> framebufferTextures = new Int2ObjectOpenHashMap<>();
     public int texGenGeneration;
     public int defaultVAO;
     public final VAOManager vaos = new VAOManager();
@@ -272,6 +275,7 @@ public class GLContextState {
     public float savedFilterAniso = -1.0f;
     public boolean lineQuadsActive = false;
     public boolean lineStippleActive = false;
+    public int textureSupersamplingSamples = 1;
     public Instancing ffpInstancing = Instancing.NONE;
     public float lastBrightnessX;
     public float lastBrightnessY;

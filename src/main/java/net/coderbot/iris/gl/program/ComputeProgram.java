@@ -10,7 +10,7 @@ import org.jetbrains.annotations.Nullable;
 import org.joml.Vector2f;
 import org.joml.Vector3i;
 import org.lwjgl.BufferUtils;
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
 import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
 
@@ -71,7 +71,7 @@ public final class ComputeProgram extends GlResource {
 	}
 
     public void use() {
-        GLStateManager.glUseProgram(getGlId());
+        GLSMPrograms.glUseProgram(getGlId());
 
         uniforms.update();
         samplers.update();
@@ -93,7 +93,8 @@ public final class ComputeProgram extends GlResource {
 
 	public static void unbind() {
 		ProgramUniforms.clearActiveUniforms();
-		GLStateManager.glUseProgram(0);
+		ProgramSamplers.clearActiveSamplers();
+		GLSMPrograms.glUseProgram(0);
 	}
 
 	@Override
@@ -102,7 +103,7 @@ public final class ComputeProgram extends GlResource {
 		if (sources != null) {
 			RetainedPrograms.retain(sources, getGlId());
 		} else {
-			GLStateManager.glDeleteProgram(getGlId());
+			GLSMPrograms.glDeleteProgram(getGlId());
 		}
 	}
 

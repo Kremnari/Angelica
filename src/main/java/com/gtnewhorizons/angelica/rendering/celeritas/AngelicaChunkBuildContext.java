@@ -44,6 +44,7 @@ import java.util.List;
 
 public class AngelicaChunkBuildContext extends ChunkBuildContext {
     public static final int NUM_PASSES = 2;
+    public static final int INTS_PER_VERTEX = 8;
 
     // Yoinked from Celeritas
     private static final int[] REVERSED_QUAD_ORDER = { 0, 3, 2, 1 };
@@ -72,8 +73,12 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
     private final float[] fluidQuadPos = new float[12];
     private ModelQuadFacing fluidQuadLightFace;
 
+    @Getter
+    private final WorldClient world;
+
     public AngelicaChunkBuildContext(RenderPassConfiguration<?> renderPassConfiguration, WorldClient world) {
         super(renderPassConfiguration);
+        this.world = world;
         this.textureAtlas = (TextureMapExtension) Minecraft.getMinecraft().getTextureMapBlocks();
         this.worldSlice = new WorldSlice(world);
         // Shade by the quad normal so sloped quads blend the face shades instead of snapping to the dominant axis;
@@ -97,7 +102,7 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
         smoothLightPipeline.reset();
         flatLightPipeline.reset();
         lightPipelineReady = true;
-        cachedSkylightSubtracted = Minecraft.getMinecraft().theWorld.skylightSubtracted;
+        cachedSkylightSubtracted = this.world.skylightSubtracted;
     }
 
     public WorldSlice swapWorldSlice(WorldSlice replacement) {
@@ -117,7 +122,7 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
     }
 
     @SuppressWarnings("unchecked")
-    public void copyRawBuffer(int[] rawBuffer, int vertexCount, int[] vertexStates,
+    public void copyRawBuffer(int[] rawBuffer, int vertexOffset, int vertexCount, int[] vertexStates,
                               int[] shaderOverrideBlockIds,
                               ChunkBuildBuffers buffers, Material material, boolean isShaderPackOverride,
                               boolean blockAllowsSmoothLighting) {
@@ -140,7 +145,7 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
         final boolean shouldApplyDiffuse = !BlockRenderingSettings.INSTANCE.shouldDisableDirectionalShading();
         final ChunkColorWriter colorEncoder = separateAo ? ChunkColorWriter.SEPARATE_AO : ChunkColorWriter.EMBEDDIUM;
 
-        int ptr = 0;
+        int ptr = vertexOffset * INTS_PER_VERTEX;
         final int numQuads = vertexCount / 4;
 
         final int blockX = blockRenderContext.localPosX;
@@ -152,7 +157,7 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
 
         final short originalBlockId = blockRenderContext.blockId;
 
-        int stateIdx = 0;
+        int stateIdx = vertexOffset;
         materialSelector.reset(material, isShaderPackOverride, useRenderPassOptimization);
         this.fluidQuadLightFace = null;
 
@@ -246,7 +251,7 @@ public class AngelicaChunkBuildContext extends ChunkBuildContext {
             final Material correctMaterial = materialSelector.select(facing, sprite, hasVertexTransparency);
             final var builder = buffers.get(correctMaterial);
 
-            final int shaderOverrideBlockId = shaderOverrideBlockIds[quadIdx * 4];
+            final int shaderOverrideBlockId = shaderOverrideBlockIds[vertexOffset + quadIdx * 4];
             blockRenderContext.blockId = shaderOverrideBlockId == StateAwareTessellator.UNMAPPED_SHADER_BLOCK_ID
                 ? -1 : shaderOverrideBlockId != -1 ? (short) shaderOverrideBlockId : originalBlockId;
 

@@ -1,6 +1,13 @@
 package com.gtnewhorizons.angelica.rendering;
 
 import com.gtnewhorizon.gtnhlib.client.renderer.MatrixHelper;
+import com.gtnewhorizons.angelica.glsm.GLSMBlend;
+import com.gtnewhorizons.angelica.glsm.GLSMCurrentAttribs;
+import com.gtnewhorizons.angelica.glsm.GLSMDepthStencilAlpha;
+import com.gtnewhorizons.angelica.glsm.GLSMEnable;
+import com.gtnewhorizons.angelica.glsm.GLSMLighting;
+import com.gtnewhorizons.angelica.glsm.GLSMMatrices;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.states.BlendState;
 import com.gtnewhorizons.angelica.glsm.states.Color4;
@@ -20,26 +27,35 @@ public final class SkippedGlintBlock {
     }
 
     public static void applyHeldItemExitState() {
-        applyExitState(0.5F * 0.76F, 0.25F * 0.76F, 0.8F * 0.76F, 1.0F, GL11.GL_SRC_COLOR, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, false, false);
+        applyItemExitState(GL11.GL_ONE, GL11.GL_ZERO);
+    }
+
+    public static void applyDroppedItemExitState() {
+        applyItemExitState(GL11.GL_SRC_COLOR, GL11.GL_ONE);
+    }
+
+    private static void applyItemExitState(int srcAlpha, int dstAlpha) {
+        applyExitState(0.5F * 0.76F, 0.25F * 0.76F, 0.8F * 0.76F, 1.0F, GL11.GL_SRC_COLOR, GL11.GL_ONE, srcAlpha, dstAlpha, false, false);
     }
 
     private static void applyExitState(float red, float green, float blue, float alpha, int srcRgb, int dstRgb, int srcAlpha, int dstAlpha, boolean resetTextureMatrix, boolean restoreDepthMask) {
-        final Color4 color = GLStateManager.getColor();
-        if (color.getRed() != red || color.getGreen() != green || color.getBlue() != blue || color.getAlpha() != alpha) {
-            GLStateManager.glColor4f(red, green, blue, alpha);
+        final boolean recording = GLStateManager.isExitCaptureActive();
+        final Color4 color = GLSMCurrentAttribs.getColor();
+        if (recording || color.getRed() != red || color.getGreen() != green || color.getBlue() != blue || color.getAlpha() != alpha) {
+            GLSMCurrentAttribs.glColor4f(red, green, blue, alpha);
         }
-        if (resetTextureMatrix && !MatrixHelper.isIdentity(GLStateManager.getTextures().getTextureUnitMatrix(0))) {
-            GLStateManager.glMatrixMode(GL11.GL_TEXTURE);
-            GLStateManager.glLoadIdentity();
+        if (resetTextureMatrix && (recording || !MatrixHelper.isIdentity(GLSMTextures.getTextures().getTextureUnitMatrix(0)))) {
+            GLSMMatrices.glMatrixMode(GL11.GL_TEXTURE);
+            GLSMMatrices.glLoadIdentity();
         }
-        if (GLStateManager.getMatrixMode().getMode() != GL11.GL_MODELVIEW) GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
-        if (restoreDepthMask && !GLStateManager.isEffectiveDepthMaskEnabled()) GLStateManager.glDepthMask(true);
-        if (!GLStateManager.getLightingState().isEnabled()) GLStateManager.glEnable(GL11.GL_LIGHTING);
-        GLStateManager.getEffectiveBlendState(blend);
-        if (GLStateManager.getBlendState().isFuncUnknown() || blend.getSrcRgb() != srcRgb || blend.getDstRgb() != dstRgb || blend.getSrcAlpha() != srcAlpha || blend.getDstAlpha() != dstAlpha) {
-            GLStateManager.tryBlendFuncSeparate(srcRgb, dstRgb, srcAlpha, dstAlpha);
+        if (recording || GLSMMatrices.getMatrixMode().getMode() != GL11.GL_MODELVIEW) GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
+        if (restoreDepthMask && (recording || !GLSMDepthStencilAlpha.isEffectiveDepthMaskEnabled())) GLSMDepthStencilAlpha.glDepthMask(true);
+        if (recording || !GLSMLighting.getLightingState().isEnabled()) GLSMEnable.glEnable(GL11.GL_LIGHTING);
+        GLSMBlend.getEffectiveBlendState(blend);
+        if (recording || GLSMBlend.getBlendState().isFuncUnknown() || blend.getSrcRgb() != srcRgb || blend.getDstRgb() != dstRgb || blend.getSrcAlpha() != srcAlpha || blend.getDstAlpha() != dstAlpha) {
+            GLSMBlend.tryBlendFuncSeparate(srcRgb, dstRgb, srcAlpha, dstAlpha);
         }
-        if (GLStateManager.isEffectiveBlendEnabled()) GLStateManager.glDisable(GL11.GL_BLEND);
-        if (GLStateManager.getDepthState().getFunc() != GL11.GL_LEQUAL) GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
+        if (recording || GLSMBlend.isEffectiveBlendEnabled()) GLSMEnable.glDisable(GL11.GL_BLEND);
+        if (recording || GLSMDepthStencilAlpha.getDepthState().getFunc() != GL11.GL_LEQUAL) GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_LEQUAL);
     }
 }

@@ -4,6 +4,9 @@ import com.gtnewhorizon.gtnhlib.client.renderer.TessellatorManager;
 import com.gtnewhorizon.gtnhlib.client.renderer.vertex.DefaultVertexFormat;
 import com.gtnewhorizons.angelica.api.tesr.TesrMaterial;
 import com.gtnewhorizons.angelica.config.AngelicaConfig;
+import com.gtnewhorizons.angelica.glsm.GLSMCurrentAttribs;
+import com.gtnewhorizons.angelica.glsm.GLSMDraws;
+import com.gtnewhorizons.angelica.glsm.GLSMMatrices;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.states.Color4;
 import com.gtnewhorizons.angelica.rendering.items.BlockRenderListManager.BlockMeta;
@@ -13,6 +16,7 @@ import com.gtnewhorizons.angelica.rendering.tesr.BatchEligibility;
 import com.gtnewhorizons.angelica.rendering.tesr.EntityMaterials;
 import com.gtnewhorizons.angelica.rendering.tesr.GlintCapture;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
+import com.gtnewhorizons.angelica.rendering.tesr.EntityShadowReplay;
 import com.gtnewhorizons.angelica.rendering.tesr.TemplateBuffer;
 import com.gtnewhorizons.angelica.utils.AnimationsRenderUtils;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
@@ -40,8 +44,7 @@ public final class DroppedItemInstancer {
     private static boolean glintSeen;
     private static final ItemPropCache.ItemProp glintProperties = new ItemPropCache.ItemProp();
     private static final ItemPropCache.ItemProp currentGlintProperties = new ItemPropCache.ItemProp();
-    private static TemplateBuffer glintTemplate;
-    private static int glintTemplateWidth, glintTemplateHeight;
+    private static final GlintMesh glintMesh = new GlintMesh();
 
     private static long instanced;
     private static long glintInstanced;
@@ -122,7 +125,7 @@ public final class DroppedItemInstancer {
     }
 
     static long batchIcon(TesrMaterial material, boolean afterGlint, float maxU, float minV, float minU, float maxV, int width, int height, float thickness) {
-        final long drawsBefore = GLStateManager.drawCalls;
+        final long drawsBefore = GLSMDraws.drawCalls;
         if (BatchEligibility.batchingAllowed()) {
             final TemplateBuffer template = iconTemplate(maxU, minV, minU, maxV, width, height, thickness);
             if (template == null) {
@@ -150,10 +153,11 @@ public final class DroppedItemInstancer {
         }
         final boolean allowed = BatchEligibility.batchingAllowed();
         if (allowed && ModelPartBatcher.INSTANCE.isShadowPass()) {
+            EntityShadowReplay.rejectShadowOnly();
             BatchEligibility.onPartQueued();
             return SKIP;
         }
-        final long drawsBefore = GLStateManager.drawCalls;
+        final long drawsBefore = GLSMDraws.drawCalls;
         if (allowed) {
             currentGlintProperties.set(maxU, minV, minU, maxV, width, height, thickness);
             if (glintSeen && glintProperties.equals(currentGlintProperties) && ModelPartBatcher.INSTANCE.replayGlint(glintCapture)) {
@@ -183,16 +187,14 @@ public final class DroppedItemInstancer {
         return drawsBefore;
     }
 
-    public static boolean queueSkippedGlint(int iconWidth, int iconHeight) {
-        if (!basePart || !BatchEligibility.batchingAllowed()) return false;
-        if (glintTemplate == null || glintTemplateWidth != iconWidth || glintTemplateHeight != iconHeight) {
-            final IconMesh hit = icons.get(0.0F, 0.0F, 1.0F, 1.0F, iconWidth, iconHeight, 0.0625F);
-            if (hit == null || hit.template == null) return false;
-            glintTemplate = hit.template;
-            glintTemplateWidth = iconWidth;
-            glintTemplateHeight = iconHeight;
-        }
-        if (!ModelPartBatcher.INSTANCE.queueSkippedHeldGlint(glintTemplate)) return false;
+    public static boolean canQueueSkippedGlint() {
+        return basePart && BatchEligibility.batchingAllowed();
+    }
+
+    public static boolean queueSkippedGlint(int stripsWide, int stripsHigh, TesrMaterial material) {
+        if (!canQueueSkippedGlint()) return false;
+        final TemplateBuffer template = glintMesh.get(stripsWide, stripsHigh);
+        if (template == null || !ModelPartBatcher.INSTANCE.queueSkippedItemGlint(template, material)) return false;
         glintInstanced += 2;
         BatchEligibility.onPartQueued();
         BatchEligibility.onPartQueued();
@@ -212,9 +214,9 @@ public final class DroppedItemInstancer {
 
     public static long directBlock(RenderBlocks rb, Block block, int meta, float brightness) {
         if (itemsDrawingBlocks != 0 || !ModelPartBatcher.INSTANCE.entitiesActive()) return RUN;
-        if (!BatchEligibility.batchingAllowed()) return GLStateManager.drawCalls;
+        if (!BatchEligibility.batchingAllowed()) return GLSMDraws.drawCalls;
         final TesrMaterial material = EntityMaterials.itemFromCurrentState(false);
-        return material != null ? batchBlock(material, rb, block, meta, brightness) : GLStateManager.drawCalls;
+        return material != null ? batchBlock(material, rb, block, meta, brightness) : GLSMDraws.drawCalls;
     }
 
     private static long itemBlock(ItemStack stack, RenderBlocks rb, Block block, int meta, float brightness, boolean unfilteredAtlas) {
@@ -232,13 +234,13 @@ public final class DroppedItemInstancer {
     }
 
     static long batchBlock(TesrMaterial material, RenderBlocks rb, Block block, int meta, float brightness) {
-        final long drawsBefore = GLStateManager.drawCalls;
+        final long drawsBefore = GLSMDraws.drawCalls;
         if (BatchEligibility.batchingAllowed()) {
             BlockMesh mesh = lookupBlock(block, meta);
             if (mesh == null) {
                 mesh = captureBlock(rb, block, meta, brightness);
             } else if (mesh.template() != null) {
-                GLStateManager.glColor4f(mesh.red(), mesh.green(), mesh.blue(), mesh.alpha());
+                GLSMCurrentAttribs.glColor4f(mesh.red(), mesh.green(), mesh.blue(), mesh.alpha());
             }
             if (mesh.template() == null) {
                 fallback++;
@@ -261,7 +263,7 @@ public final class DroppedItemInstancer {
 
     public static void endPart(long part) {
         if (part >= 0L) {
-            BatchEligibility.onPartFallback(part, GLStateManager.drawCalls);
+            BatchEligibility.onPartFallback(part, GLSMDraws.drawCalls);
         }
     }
 
@@ -276,10 +278,24 @@ public final class DroppedItemInstancer {
         basePart = false;
         glintCapture.reset();
         glintSeen = false;
-        glintTemplate = null;
+        glintMesh.template = null;
         if (blockBackend != null) {
             blockBackend.delete();
             blockBackend = null;
+        }
+    }
+
+    private static final class GlintMesh {
+        TemplateBuffer template;
+        int stripsWide, stripsHigh;
+
+        TemplateBuffer get(int stripsWide, int stripsHigh) {
+            if (template == null || this.stripsWide != stripsWide || this.stripsHigh != stripsHigh) {
+                template = iconTemplate(0.0F, 0.0F, 1.0F, 1.0F, stripsWide, stripsHigh, 0.0625F);
+                this.stripsWide = stripsWide;
+                this.stripsHigh = stripsHigh;
+            }
+            return template;
         }
     }
 
@@ -304,7 +320,7 @@ public final class DroppedItemInstancer {
         }
         final TemplateBuffer template;
         final AnimationsRenderUtils.SpriteCapture sprites = AnimationsRenderUtils.captureSprites();
-        GLStateManager.glPushMatrix();
+        GLSMMatrices.glPushMatrix();
         try {
             blockBackend.begin();
             try {
@@ -313,10 +329,10 @@ public final class DroppedItemInstancer {
                 template = blockBackend.end();
             }
         } finally {
-            GLStateManager.glPopMatrix();
+            GLSMMatrices.glPopMatrix();
             sprites.close();
         }
-        final Color4 color = GLStateManager.getColor();
+        final Color4 color = GLSMCurrentAttribs.getColor();
         final BlockMesh mesh = new BlockMesh(template, color.getRed(), color.getGreen(), color.getBlue(), color.getAlpha(), sprites);
         blocks.put(new BlockMeta(block, meta), mesh);
         return mesh;

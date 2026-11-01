@@ -3,6 +3,7 @@ package net.coderbot.iris.gl.program;
 import lombok.Getter;
 import net.coderbot.iris.gl.GlResource;
 import net.coderbot.iris.gl.blending.DepthColorStorage;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import org.jetbrains.annotations.Nullable;
@@ -42,28 +43,38 @@ public final class Program extends GlResource {
 	}
 
 	public void use() {
-		RenderSystem.memoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL43.GL_SHADER_STORAGE_BARRIER_BIT);
-		bindManaged(getGlId());
+		final boolean suspended = GLStateManager.suspendExitCapture();
+		try {
+			RenderSystem.memoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+			bindManaged(getGlId());
 
-		uniforms.update();
-		samplers.update();
-		images.update();
+			uniforms.update();
+			samplers.update();
+			images.update();
+		} finally {
+			GLStateManager.resumeExitCapture(suspended);
+		}
 	}
 
 	static void bindManaged(int program) {
 		final int previousManagedBind = managedBindProgram;
 		managedBindProgram = program;
 		try {
-			GLStateManager.glUseProgram(program);
+			GLSMPrograms.glUseProgram(program);
 		} finally {
 			managedBindProgram = previousManagedBind;
 		}
 	}
 
 	public static void unbind() {
-		ProgramUniforms.clearActiveUniforms();
-		ProgramSamplers.clearActiveSamplers();
-		GLStateManager.glUseProgram(0);
+		final boolean suspended = GLStateManager.suspendExitCapture();
+		try {
+			ProgramUniforms.clearActiveUniforms();
+			ProgramSamplers.clearActiveSamplers();
+			GLSMPrograms.glUseProgram(0);
+		} finally {
+			GLStateManager.resumeExitCapture(suspended);
+		}
 	}
 
 	@Override
@@ -72,7 +83,7 @@ public final class Program extends GlResource {
 		if (sources != null) {
 			RetainedPrograms.retain(sources, getGlId());
 		} else {
-			GLStateManager.glDeleteProgram(getGlId());
+			GLSMPrograms.glDeleteProgram(getGlId());
 		}
 	}
 

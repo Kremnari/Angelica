@@ -45,6 +45,7 @@ import static org.lwjgl.system.MemoryStack.*;
 import static org.lwjgl.system.MemoryUtil.memAlloc;
 import static org.lwjgl.system.MemoryUtil.memFree;
 
+import com.gtnewhorizons.angelica.glsm.backend.RenderBackend;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.glsm.texture.TextureStaging;
 import com.gtnewhorizons.angelica.sdlgpu.device.Device;
@@ -331,19 +332,9 @@ public final class ResourceManager {
             fboAttachedGlIds.remove(glId);
             for (FboState fbo : fboStates.values()) {
                 for (int i = 0; i < ContextState.MAX_COLOR_ATTACHMENTS; i++) {
-                    if (fbo.colorGlIds[i] == glId) {
-                        fbo.colorTextures[i] = 0;
-                        fbo.colorGlIds[i] = 0;
-                        fbo.colorFormats[i] = 0;
-                        fbo.targetsDirty = true;
-                    }
+                    if (fbo.colorGlIds[i] == glId) fbo.detachColor(i);
                 }
-                if (fbo.depthGlId == glId) {
-                    fbo.depthTexture = 0;
-                    fbo.depthGlId = 0;
-                    fbo.depthFormat = 0;
-                    fbo.targetsDirty = true;
-                }
+                if (fbo.depthGlId == glId) fbo.detachDepth();
             }
             texSamplerStates.remove(glId);
         } finally {
@@ -514,6 +505,7 @@ public final class ResourceManager {
                     if (fbo.colorGlIds[i] == glId) {
                         fbo.colorTextures[i] = newHandle;
                         fbo.targetsDirty = true;
+                        fbo.cachedFormatsDirty = true;
                         if (meta != null) {
                             fbo.colorFormats[i] = meta.sdlFormat();
                             if (i == 0) {
@@ -706,7 +698,7 @@ public final class ResourceManager {
         final GpuBucket b = gpuBufferPool.get(Hashing.packHiLo(usage, bucket));
         if (b == null || b.handles.isEmpty()) return 0;
         for (int i = 0, n = b.handles.size(); i < n; i++) {
-            if (gpuPoolCurrentFrame - b.frames.getLong(i) >= Device.MAX_FRAMES_IN_FLIGHT) {
+            if (gpuPoolCurrentFrame - b.frames.getLong(i) >= RenderBackend.MAX_FRAMES_IN_FLIGHT) {
                 final long handle = b.handles.getLong(i);
                 final int last = n - 1;
                 if (i != last) {
@@ -815,6 +807,7 @@ public final class ResourceManager {
         final ByteBuffer droppedPboStaging;
         final ByteBuffer droppedPlainStaging;
         final PersistentMapping droppedPm;
+        final boolean hadEboShadow;
         wLock.lock();
         try {
             final long handle = bufferHandles.remove(glId);
@@ -828,7 +821,7 @@ public final class ResourceManager {
             droppedPlainStaging = removePlainMappingLocked(glId);
             droppedPboStaging = pboStagingData.remove(glId);
             deleteUboShadow(glId);
-            deleteEboShadow(glId);
+            hadEboShadow = deleteEboShadow(glId);
             deleteArrayShadow(glId);
             if (handle != 0) {
                 returnBufferToPool(handle, usage, size);
@@ -837,6 +830,7 @@ public final class ResourceManager {
         } finally {
             wLock.unlock();
         }
+        if (hadEboShadow) invalidateSplitCacheFor(glId);
         if (droppedPboStaging != null) {
             memFree(droppedPboStaging);
         }
@@ -1285,11 +1279,12 @@ public final class ResourceManager {
         try { return eboShadowVersions.get(bufferGlId); } finally { rLock.unlock(); }
     }
 
-    private void deleteEboShadow(int bufferGlId) {
+    private boolean deleteEboShadow(int bufferGlId) {
         final ByteBuffer existing = eboShadows.remove(bufferGlId);
         if (existing != null) memFree(existing);
         eboShadowVersions.remove(bufferGlId);
         eboShadowWanted.remove(bufferGlId);
+        return existing != null;
     }
 
     public boolean canShadowArrayBuffer(int size) {
@@ -1564,7 +1559,7 @@ public final class ResourceManager {
             for (int i = 0; i < n; i += 2) {
                 final long handle = batchSegmentPending.getLong(i);
                 final long stamp = batchSegmentPending.getLong(i + 1);
-                if (currentFrame - stamp >= Device.MAX_FRAMES_IN_FLIGHT) {
+                if (currentFrame - stamp >= RenderBackend.MAX_FRAMES_IN_FLIGHT) {
                     batchSegmentFree.enqueue(handle);
                 } else {
                     batchSegmentPending.set(w, handle);
@@ -2454,7 +2449,7 @@ public final class ResourceManager {
     }
 
     private static final int DUMMY_VBO_SIZE = 16 * 16;
-    public static final int ATTRIB_RING_BLOCKS = 2048 * Device.MAX_FRAMES_IN_FLIGHT;
+    public static final int ATTRIB_RING_BLOCKS = 2048 * RenderBackend.MAX_FRAMES_IN_FLIGHT;
     public static final int ATTRIB_RING_CHUNK_BLOCKS = 64;
     private static final int ATTRIB_RING_CHUNKS = ATTRIB_RING_BLOCKS / ATTRIB_RING_CHUNK_BLOCKS;
     private final AtomicLong attribRingCounter = new AtomicLong();

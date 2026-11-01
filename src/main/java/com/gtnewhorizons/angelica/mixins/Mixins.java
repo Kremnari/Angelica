@@ -68,7 +68,12 @@ public enum Mixins implements IMixins {
             , "angelica.optimizations.MixinRenderBiped_ArmorResource"
             , "angelica.optimizations.MixinRendererLivingEntity"
             , "angelica.rendering.MixinRenderGlobal_SelectionBox"
+            , "angelica.textures.MixinForgeHooksClient_GuiSupersampling"
+            , "angelica.textures.MixinRenderBlocks_GuiSupersampling"
+            , "angelica.textures.MixinRenderItem_GuiSupersampling"
+            , "angelica.textures.MixinTileEntityRendererDispatcher_GuiSupersampling"
             , "angelica.gui.MixinGuiIngameForge_ModernF3"
+            , "angelica.textures.MixinRenderItem_GuiSampler"
         )
     ),
 
@@ -89,6 +94,24 @@ public enum Mixins implements IMixins {
         .setPhase(Phase.LATE)
         .addRequiredMod(TargetedMod.RAILCRAFT)
         .addClientMixins("client.railcraft.MixinRenderBlockLamp")
+    ),
+
+    BOTANIA_DEBUG_SCREEN(new MixinBuilder("Move Botania's F3 text into its own debug screen group")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.BOTANIA)
+        .addClientMixins("client.botania.MixinDebugHandler")
+    ),
+
+    JOURNEYMAP_DEBUG_SCREEN(new MixinBuilder("Move JourneyMap's F3 text into its own debug screen group")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.JOURNEYMAP)
+        .addClientMixins("client.journeymap.MixinMiniMapOverlayHandler")
+    ),
+
+    HODGEPODGE_DEBUG_SCREEN(new MixinBuilder("Move Hodgepodge's ChunkGen F3 text into its own debug screen group")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.HODGEPODGE)
+        .addClientMixins("client.hodgepodge.MixinChunkGenDebugHandler")
     ),
 
     ANGELICA_ENTITY_OVERLAYS(new MixinBuilder()
@@ -204,6 +227,15 @@ public enum Mixins implements IMixins {
             "angelica.entity.MixinRender_ShadowBatch",
             "angelica.entity.MixinTextureManager",
             "angelica.tesr.MixinTileEntitySpecialRenderer_BatchEligibility"
+        )
+    ),
+
+    ANGELICA_ENTITY_SHADOW_REPLAY(new MixinBuilder("Replay entity draws recorded in the shader shadow pass in the main view instead of running each entity renderer again")
+        .setPhase(Phase.EARLY)
+        .setApplyIf(() -> AngelicaConfig.enableIris && AngelicaConfig.entityShadowReplayEnabled())
+        .addClientMixins(
+            "angelica.entity.MixinBossStatus_EntityReplay",
+            "angelica.entity.MixinRenderGlobal_EntityReplay"
         )
     ),
 
@@ -388,6 +420,14 @@ public enum Mixins implements IMixins {
         )
     ),
 
+    ANGELICA_DEBUG_KEY(new MixinBuilder()
+        .addExcludedMod(TargetedMod.ET_FUTURUM_REQUIEM)
+        .setPhase(Phase.EARLY)
+        .addClientMixins(
+            "angelica.debug.MixinMinecraft_DebugKey"
+        )
+    ),
+
     IRIS_STARTUP(new MixinBuilder()
         .setPhase(Phase.EARLY)
         .setApplyIf(() -> AngelicaConfig.enableIris)
@@ -443,6 +483,7 @@ public enum Mixins implements IMixins {
             , "celeritas.frustum.MixinClippingHelperImpl"
             , "celeritas.frustum.MixinFrustrum"
             , "celeritas.features.culling.MixinEffectRenderer"
+            , "celeritas.features.mipmaps.MixinEffectRenderer"
             , "celeritas.features.mipmaps.MixinTextureAtlasSprite"
             , "celeritas.features.mipmaps.MixinTextureMetadataSection"
             , "celeritas.features.mipmaps.MixinTextureMetadataSectionSerializer"
@@ -473,7 +514,6 @@ public enum Mixins implements IMixins {
             , "celeritas.terrain.MixinShaderLoader"
             , "celeritas.terrain.MixinGlUniformMatrix4f"
             , "celeritas.terrain.MixinGlUniformMatrix3f"
-            , "celeritas.terrain.MixinDefaultChunkRenderer"
         )
     ),
 
@@ -647,6 +687,11 @@ public enum Mixins implements IMixins {
         .addExcludedMod(TargetedMod.LUMI)
         .setApplyIf(() -> AngelicaConfig.optimizeWorldUpdateLight)
         .addCommonMixins("angelica.lighting.MixinWorld_FixLightUpdateLag")),
+
+    TESR_LIGHT_CACHE(new MixinBuilder("Cache the tile-entity dispatcher's per-tile lightmap lookup for one tick")
+        .setPhase(Phase.EARLY)
+        .setApplyIf(() -> AngelicaConfig.enableTESRLightCache)
+        .addClientMixins("angelica.lighting.MixinTileEntityRendererDispatcher_LightCache")),
 
     SPEEDUP_VANILLA_ANIMATIONS(new MixinBuilder()
         .setPhase(Phase.EARLY)
@@ -875,6 +920,11 @@ public enum Mixins implements IMixins {
         .addRequiredMod(TargetedMod.DRAGON_API)
         .setApplyIf(() -> AngelicaConfig.enableIris)
         .addClientMixins("client.dragonapi.MixinThrottleableEffectRenderer")
+    ),
+    DRAGONAPI_PARTICLE_CUTOFF(new MixinBuilder("Modern 26.2 mipmap alpha cutoff for DragonAPI's terrain particles")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.DRAGON_API)
+        .addClientMixins("client.dragonapi.MixinThrottleableEffectRenderer_MipmapCutoff")
     ),
     DRAGONAPI_PARTICLE_BATCH(new MixinBuilder("Particle instancing for DragonAPI's replacement particle renderer")
         .setPhase(Phase.LATE)

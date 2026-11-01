@@ -9,10 +9,20 @@ import com.google.common.primitives.Ints;
 import com.gtnewhorizons.angelica.compat.mojang.Camera;
 import com.gtnewhorizons.angelica.config.AngelicaConfig;
 import com.gtnewhorizons.angelica.glsm.GLDebug;
+import lombok.Getter;
 import org.embeddedt.embeddium.impl.gl.shader.uniform.GlUniformMatrix3f;
 import org.embeddedt.embeddium.impl.gl.shader.uniform.GlUniformMatrix4f;
 import org.joml.Matrix3f;
 import org.joml.Matrix4fc;
+import com.gtnewhorizons.angelica.glsm.GLSMBlend;
+import com.gtnewhorizons.angelica.glsm.GLSMCurrentAttribs;
+import com.gtnewhorizons.angelica.glsm.GLSMDepthStencilAlpha;
+import com.gtnewhorizons.angelica.glsm.GLSMEnable;
+import com.gtnewhorizons.angelica.glsm.GLSMFog;
+import com.gtnewhorizons.angelica.glsm.GLSMFramebuffer;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
+import com.gtnewhorizons.angelica.glsm.GLSMRasterizer;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import com.gtnewhorizons.angelica.glsm.ffp.Instancing;
@@ -25,6 +35,7 @@ import com.gtnewhorizons.angelica.rendering.tesr.BatchEligibility;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrInstancingPipeline;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
+import me.jellysquid.mods.sodium.client.gui.SodiumGameOptions;
 import net.coderbot.iris.Iris;
 import net.coderbot.iris.block_rendering.BlockMaterialMapping;
 import net.coderbot.iris.block_rendering.BlockRenderingSettings;
@@ -52,6 +63,7 @@ import net.coderbot.iris.gl.program.Program;
 import net.coderbot.iris.gl.program.ProgramBuilder;
 import net.coderbot.iris.gl.program.ProgramImages;
 import net.coderbot.iris.gl.program.ProgramSamplers;
+import net.coderbot.iris.gl.sampler.GlSampler;
 import net.coderbot.iris.gl.sampler.SamplerHolder;
 import net.coderbot.iris.gl.state.FogMode;
 import com.gtnewhorizons.angelica.glsm.texture.DepthBufferFormat;
@@ -232,6 +244,13 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 	private boolean shouldBindPBR;
 	private int currentNormalTexture;
 	private int currentSpecularTexture;
+	@Getter
+    private GlSampler normalSampler;
+	@Getter
+    private GlSampler specularSampler;
+	private TextureFormat samplerFormat;
+	private int samplerAnisotropy = -1;
+	private boolean samplerBreaksAnisotropy;
 	private PackDirectives packDirectives;
 	private final Set<FeatureFlags> activeFeatures;
 	private final ProgramFallbackResolver resolver;
@@ -248,10 +267,10 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			final long _t0 = System.nanoTime();
 			long _tLast = _t0;
 
-			final int entryTextureUnit = GLStateManager.getActiveTextureUnit();
-			GLStateManager.glActiveTexture(GL13.GL_TEXTURE2);
+			final int entryTextureUnit = GLSMTextures.getActiveTextureUnit();
+			GLSMTextures.glActiveTexture(GL13.GL_TEXTURE2);
 			customTextureManager = new CustomTextureManager(programs.getPackDirectives(), programs.getPack().getCustomTextureDataMap(), programs.getPack().getIrisCustomTextureDataMap(), programs.getPack().getCustomNoiseTexture());
-			GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + entryTextureUnit);
+			GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0 + entryTextureUnit);
 
 			final Map<Integer, CompletableFuture<Map<PatchShaderType, String>>> prepareTransformFutures =
 				submitCompositeTransforms(programs.getPrepare(), TextureStage.PREPARE, programs.getPackDirectives().getTextureMap());
@@ -377,10 +396,12 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			BlockRenderingSettings.INSTANCE.setAmbientOcclusionLevel(programs.getPackDirectives().getAmbientOcclusionLevel());
 			BlockRenderingSettings.INSTANCE.setDisableDirectionalShading(shouldDisableDirectionalShading());
 			BlockRenderingSettings.INSTANCE.setUseSeparateAo(programs.getPackDirectives().shouldUseSeparateAo());
+			BlockRenderingSettings.INSTANCE.setBreaksAnisotropy(programs.getPackDirectives().breaksAnisotropy());
 			BlockRenderingSettings.INSTANCE.setUseExtendedVertexFormat(true);
+			updatePbrSamplers(TextureFormatLoader.getFormat(), SodiumGameOptions.resolvedAnisotropicFiltering());
 
 			// Don't clobber anything in texture unit 0. It probably won't cause issues, but we're just being cautious here.
-			GLStateManager.glActiveTexture(GL13.GL_TEXTURE2);
+			GLSMTextures.glActiveTexture(GL13.GL_TEXTURE2);
 
 			whitePixel = new NativeImageBackedSingleColorTexture(255, 255, 255, 255);
 
@@ -416,7 +437,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 				this.ssboHolder = null;
 			}
 
-			GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
+			GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
 
 			BufferFlipper flipper = new BufferFlipper();
 
@@ -1113,14 +1134,14 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 		GLSMHooks.resolvePendingProgram();
 		final Pass pass = this.current;
 		if (pass == null) {
-			if (GLStateManager.getActiveProgram() == 0) {
+			if (GLSMPrograms.getActiveProgram() == 0) {
 				matchPass();
 			}
 			return;
 		}
 		final Program program = pass.getProgram();
 		final GlFramebuffer expected = isBeforeTranslucent ? pass.framebufferBeforeTranslucents : pass.framebufferAfterTranslucents;
-		if (program != null && GLStateManager.getActiveProgram() == program.getProgramId() && GLStateManager.getDrawFramebuffer() == expected.getId()) {
+		if (program != null && GLSMPrograms.getActiveProgram() == program.getProgramId() && GLSMFramebuffer.getDrawFramebuffer() == expected.getId()) {
 			return;
 		}
 		pass.use();
@@ -1437,10 +1458,24 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 
 		void rebindProgram() {
 			if (program != null) program.use();
-			DeferredWorldRenderingPipeline.this.customUniforms.push(this);
+			final boolean suspended = GLStateManager.suspendExitCapture();
+			try {
+				DeferredWorldRenderingPipeline.this.customUniforms.push(this);
+			} finally {
+				GLStateManager.resumeExitCapture(suspended);
+			}
 		}
 
 		private void useNow() {
+			final boolean suspended = GLStateManager.suspendExitCapture();
+			try {
+				applyState();
+			} finally {
+				GLStateManager.resumeExitCapture(suspended);
+			}
+		}
+
+		private void applyState() {
 			DepthColorStorage.unlockDepthColor();
 
 			if (isBeforeTranslucent) {
@@ -1450,10 +1485,10 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			}
 
 			if (shadowViewport) {
-				GLStateManager.glViewport(0, 0, shadowMapResolution, shadowMapResolution);
+				GLSMRasterizer.glViewport(0, 0, shadowMapResolution, shadowMapResolution);
 			} else {
                 final Framebuffer main = Minecraft.getMinecraft().getFramebuffer();
-				GLStateManager.glViewport(0, 0, main.framebufferWidth, main.framebufferHeight);
+				GLSMRasterizer.glViewport(0, 0, main.framebufferWidth, main.framebufferHeight);
 			}
 
 			// Apply state overrides before program.use() so that uniforms (e.g. iris_currentAlphaTest)
@@ -1485,14 +1520,19 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 		}
 
 		public void stopUsing() {
-			DepthColorStorage.unlockDepthColor();
+			final boolean suspended = GLStateManager.suspendExitCapture();
+			try {
+				DepthColorStorage.unlockDepthColor();
 
-			if (alphaTestOverride != null) {
-				AlphaTestOverride.restore();
-			}
+				if (alphaTestOverride != null) {
+					AlphaTestOverride.restore();
+				}
 
-			if (blendModeOverride != null || (bufferBlendOverrides != null && !bufferBlendOverrides.isEmpty())) {
-				BlendModeOverride.restore();
+				if (blendModeOverride != null || (bufferBlendOverrides != null && !bufferBlendOverrides.isEmpty())) {
+					BlendModeOverride.restore();
+				}
+			} finally {
+				GLStateManager.resumeExitCapture(suspended);
 			}
 		}
 
@@ -1596,12 +1636,17 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 	}
 
 	private boolean usesImage(@Nullable Program program, String image) {
-		return program != null && (GLStateManager.glGetUniformLocation(program.getProgramId(), image) != -1 || vertexWriteReplays.writesImage(program, image));
+		return program != null && (GLSMPrograms.glGetUniformLocation(program.getProgramId(), image) != -1 || vertexWriteReplays.writesImage(program, image));
 	}
 
 	@Override
 	public boolean hasInstancedVariant(Instancing kind) {
 		return current != null && current.instancedVariant(kind) != null;
+	}
+
+	public boolean hasInstancedVariant(RenderCondition condition, InputAvailability availability, Instancing kind) {
+		final Pass pass = table.match(condition, availability);
+		return pass != null && pass.instancedVariant(kind) != null;
 	}
 
 	@Override
@@ -1637,7 +1682,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			vertexWriteReplays.attach(name, program, transformed, (samplers, images) -> wireGbufferResources(samplers, images, availability, shadow));
 			this.customUniforms.mapholderToPass(builder, program);
 			final int id = program.getProgramId();
-			return new WideLineProgram(program, GLStateManager.glGetUniformLocation(id, "iris_LineWidth"), GLStateManager.glGetUniformLocation(id, "iris_ScreenSize"));
+			return new WideLineProgram(program, GLSMPrograms.glGetUniformLocation(id, "iris_LineWidth"), GLSMPrograms.glGetUniformLocation(id, "iris_ScreenSize"));
 		} catch (Exception e) {
 			Iris.logger.warn("Wide line program link failed for {}; lines there stay 1 px wide", sourceName, e);
 			return null;
@@ -1654,7 +1699,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 		GLSMHooks.resolvePendingProgram();
 		final Pass pass = current;
 		if (pass == null || pass.getProgram() == null || activeInstancing != Instancing.NONE
-			|| GLStateManager.getActiveProgram() != pass.getProgram().getProgramId()) {
+			|| GLSMPrograms.getActiveProgram() != pass.getProgram().getProgramId()) {
 			return false;
 		}
 
@@ -1676,8 +1721,8 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 		if (wide != null) {
 			wide.program().use();
 			this.customUniforms.push(wide.program());
-			final var viewport = GLStateManager.getViewportState();
-			RenderSystem.uniform1f(wide.lineWidthLocation(), GLStateManager.getLineState().getWidth());
+			final var viewport = GLSMRasterizer.getViewportState();
+			RenderSystem.uniform1f(wide.lineWidthLocation(), GLSMRasterizer.getLineState().getWidth());
 			RenderSystem.uniform2f(wide.screenSizeLocation(), viewport.width, viewport.height);
 		}
 		return true;
@@ -1710,9 +1755,9 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 		DepthColorStorage.unlockDepthColor();
 		BlendModeOverride.restore();
 		AlphaTestOverride.restore();
-		GLStateManager.enableAlphaTest();
-		GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1f);
-		GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
+		GLSMDepthStencilAlpha.enableAlphaTest();
+		GLSMDepthStencilAlpha.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+		GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_LEQUAL);
 		GLStateManager.incrementFragmentGeneration();
 
 		FullScreenQuadRenderer.clearLocCache();
@@ -1831,7 +1876,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 	private void prepareRenderTargets() {
 		parityState.onFrameStart();
 		// Make sure we're using texture unit 0 for this.
-		GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
+		GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
 
 		if (shadowRenderTargets != null) {
 			profiler.startSection("iris_shadow_clear");
@@ -1845,7 +1890,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			} else {
 				// Clear depth first, regardless of any color clearing.
 				shadowRenderTargets.getDepthSourceFb().bind();
-                GLStateManager.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+                GLSMFramebuffer.glClear(GL11.GL_DEPTH_BUFFER_BIT);
 
 				ImmutableList<ClearPass> passes;
 
@@ -1932,7 +1977,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			passes = clearPasses;
 		}
 
-		final Vector3d fogColor3 = GLStateManager.getFogColor();
+		final Vector3d fogColor3 = GLSMFog.getFogColor();
 
 		// NB: The alpha value must be 1.0 here, or else you will get a bunch of bugs. Sildur's Vibrant Shaders
 		//     will give you pink reflections and other weirdness if this is zero.
@@ -1998,8 +2043,8 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 	private void bindVoxelizationMatrixUniforms() {
 		if (shadowVoxelizationCompute == null) return;
 		final int id = shadowVoxelizationCompute.getProgramId();
-		final int modelView = GLStateManager.glGetUniformLocation(id, "iris_ModelViewMatrix");
-		final int normal = GLStateManager.glGetUniformLocation(id, "iris_NormalMatrix");
+		final int modelView = GLSMPrograms.glGetUniformLocation(id, "iris_ModelViewMatrix");
+		final int normal = GLSMPrograms.glGetUniformLocation(id, "iris_NormalMatrix");
 		this.voxelizationModelView = modelView >= 0 ? new GlUniformMatrix4f(modelView) : null;
 		this.voxelizationNormalMatrix = normal >= 0 ? new GlUniformMatrix3f(normal) : null;
 	}
@@ -2178,8 +2223,8 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			profiler.endSection();
 		}
 
-		GLStateManager.enableBlend();
-		GLStateManager.enableAlphaTest();
+		GLSMBlend.enableBlend();
+		GLSMDepthStencilAlpha.enableAlphaTest();
 
 		// note: we are careful not to touch the lightmap texture unit or overlay color texture unit here,
 		// so we don't need to do anything to restore them if needed.
@@ -2269,6 +2314,8 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			return;
 		}
 
+		updatePbrSamplers(TextureFormatLoader.getFormat(), SodiumGameOptions.resolvedAnisotropicFiltering());
+
 		isRenderingFullScreenPass = false;
 		isRenderingWorld = true;
 		isBeforeTranslucent = true;
@@ -2336,16 +2383,16 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 
 		if (true/*skyType == DimensionSpecialEffects.SkyType.NORMAL*/) {
 			profiler.startSection("iris_horizon");
-            GLStateManager.glDisable(GL11.GL_TEXTURE_2D);
-			GLStateManager.glDepthMask(false);
+            GLSMEnable.glDisable(GL11.GL_TEXTURE_2D);
+			GLSMDepthStencilAlpha.glDepthMask(false);
 
-			final Vector3d fogColor = GLStateManager.getFogColor();
-            GLStateManager.glColor4f((float) fogColor.x, (float) fogColor.y, (float) fogColor.z, 1.0F);
+			final Vector3d fogColor = GLSMFog.getFogColor();
+            GLSMCurrentAttribs.glColor4f((float) fogColor.x, (float) fogColor.y, (float) fogColor.z, 1.0F);
 
 			horizonRenderer.renderHorizon(RenderingState.INSTANCE.getModelViewBuffer());
 
-			GLStateManager.glDepthMask(true);
-            GLStateManager.glEnable(GL11.GL_TEXTURE_2D);
+			GLSMDepthStencilAlpha.glDepthMask(true);
+            GLSMEnable.glEnable(GL11.GL_TEXTURE_2D);
 			profiler.endSection();
 		}
 	}
@@ -2493,25 +2540,40 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 		return currentSpecularTexture;
 	}
 
+    void updatePbrSamplers(TextureFormat format, int anisotropy) {
+		final boolean breaksAnisotropy = BlockRenderingSettings.INSTANCE.breaksAnisotropy();
+		if (samplerFormat == format && samplerAnisotropy == anisotropy && samplerBreaksAnisotropy == breaksAnisotropy) {
+			return;
+		}
+		normalSampler = IrisSamplers.getPbrSampler(format, PBRType.NORMAL, anisotropy);
+		specularSampler = IrisSamplers.getPbrSampler(format, PBRType.SPECULAR, anisotropy);
+		samplerFormat = format;
+		samplerAnisotropy = anisotropy;
+		samplerBreaksAnisotropy = breaksAnisotropy;
+	}
+
 	@Override
 	public void onBindTexture(int id) {
 		if (shouldBindPBR && isRenderingWorld) {
-			final PBRTextureHolder pbrHolder = PBRTextureManager.INSTANCE.getOrLoadHolder(id);
-			currentNormalTexture = pbrHolder.getNormalTexture().getGlTextureId();
-			currentSpecularTexture = pbrHolder.getSpecularTexture().getGlTextureId();
-
-			BatchStateGuard.suspend();
+			final boolean suspended = GLStateManager.suspendExitCapture();
 			try {
-				final TextureFormat textureFormat = TextureFormatLoader.getFormat();
-				if (textureFormat != null) {
-					textureFormat.setupTextureParameters(PBRType.NORMAL, pbrHolder.getNormalTexture());
-					textureFormat.setupTextureParameters(PBRType.SPECULAR, pbrHolder.getSpecularTexture());
-				}
-
-				PBRTextureManager.notifyPBRTexturesChanged();
+				updatePbrTextures(id);
 			} finally {
-				BatchStateGuard.resume();
+				GLStateManager.resumeExitCapture(suspended);
 			}
+		}
+	}
+
+	private void updatePbrTextures(int id) {
+		final PBRTextureHolder pbrHolder = PBRTextureManager.INSTANCE.getOrLoadHolder(id);
+		currentNormalTexture = pbrHolder.getNormalTexture().getGlTextureId();
+		currentSpecularTexture = pbrHolder.getSpecularTexture().getGlTextureId();
+
+		BatchStateGuard.suspend();
+		try {
+			PBRTextureManager.notifyPBRTexturesChanged();
+		} finally {
+			BatchStateGuard.resume();
 		}
 	}
 

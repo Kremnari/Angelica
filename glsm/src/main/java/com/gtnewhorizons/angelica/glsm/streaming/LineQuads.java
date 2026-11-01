@@ -4,7 +4,9 @@ import com.gtnewhorizon.gtnhlib.client.renderer.vertex.DefaultVertexFormat;
 import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFlags;
 import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormat;
 import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormatElement;
+import com.gtnewhorizons.angelica.glsm.GLSMRasterizer;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.ffp.VAOManager;
 import org.lwjgl.opengl.GL11;
 
 import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memCopy;
@@ -59,17 +61,29 @@ public final class LineQuads {
     }
 
     public static boolean disableCulling() {
-        final boolean wasEnabled = GLStateManager.getCullState().isEnabled();
+        final boolean wasEnabled = GLSMRasterizer.getCullState().isEnabled();
         if (wasEnabled) {
-            GLStateManager.disableCull();
+            GLSMRasterizer.disableCull();
         }
         return wasEnabled;
     }
 
     public static void restoreCulling(boolean wasEnabled) {
         if (wasEnabled) {
-            GLStateManager.enableCull();
+            GLSMRasterizer.enableCull();
         }
+    }
+
+    public static boolean beginDraw(int vertexFlags) {
+        VAOManager.setCurrentVertexFlags(vertexFlags);
+        final boolean culled = disableCulling();
+        GLStateManager.ctx().lineQuadsActive = true;
+        return culled;
+    }
+
+    public static void endDraw(boolean culled) {
+        GLStateManager.ctx().lineQuadsActive = false;
+        restoreCulling(culled);
     }
 
     public static VertexFormat quadFormat(VertexFormat lineFormat) {

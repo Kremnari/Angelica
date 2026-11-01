@@ -1,6 +1,6 @@
 package com.gtnewhorizons.angelica.glsm.texture;
 
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import lombok.Getter;
 import lombok.Setter;
@@ -21,6 +21,7 @@ public class TextureInfo {
     protected int resolvedInternalFormat = -1;
     protected int width = -1;
     protected int height = -1;
+    @Getter @Setter private int atlasGutter;
 
     protected int minFilter = UNSET_INT;
     protected int magFilter = UNSET_INT;
@@ -125,14 +126,14 @@ public class TextureInfo {
     }
 
     private int queryParameteri(int pname) {
-        if (GLStateManager.getBoundTextureForServerState() == id) {
+        if (GLSMTextures.getBoundTextureForServerState() == id) {
             return RENDER_BACKEND.getTexParameteri(target, pname);
         }
         return RENDER_BACKEND.getTextureParameteri(id, target, pname);
     }
 
     private float queryParameterf(int pname) {
-        if (GLStateManager.getBoundTextureForServerState() == id) {
+        if (GLSMTextures.getBoundTextureForServerState() == id) {
             return RENDER_BACKEND.getTexParameterf(target, pname);
         }
         return RENDER_BACKEND.getTextureParameterf(id, target, pname);
